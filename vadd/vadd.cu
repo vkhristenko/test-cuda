@@ -3,12 +3,17 @@
 #include <cassert>
 #include "../common/utils.h"
 
-template<typename T>
+template<typename T, size_t Is=100000>
 __global__
 void kernel_vadd(T const* as, T const* bs, T *cs, unsigned int size) {
     auto idx = threadIdx.x + blockIdx.x*blockDim.x;
     if (idx < size) {
-        cs[idx] = as[idx] + bs[idx];
+        T result{}; 
+        T a = as[idx];
+        T b = bs[idx];
+        for (unsigned int i=0; i<Is; i++)
+            result = a + b;
+        cs[idx] = result;
     }
 }
 
