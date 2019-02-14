@@ -40,7 +40,7 @@ void test_add(unsigned int size) {
     cuda::copy_to_dev(d_bs, h_bs);
     cuda::assert_if_error("checking copying host to device");
 
-    int nthreads_per_block = 256;
+    int nthreads_per_block = 1024;
     int nblocks = (size + nthreads_per_block - 1) / nthreads_per_block;
     kernel_vadd<T><<<nblocks, nthreads_per_block>>>(d_as, d_bs, d_cs, size);
     cuda::assert_if_error("checking vadd kernel");
