@@ -30,7 +30,7 @@
 template<typename T>
 struct Point {
     T x;
-    T y;
+//    T y[1];
 };
 
 // Convenience function for checking CUDA runtime API results
@@ -52,11 +52,18 @@ __global__
 void compute(Point<T>* a)
 {
   int idx = blockDim.x * blockIdx.x + threadIdx.x;
-  a[idx].x = a[idx].x + T{static_cast<T>(1.0)};
+  a[idx].x = a[idx].x + 1;
+}
+
+template<typename T>
+__global__
+void compute(T* a) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    a[idx] = a[idx] + 1;
 }
 
 template <typename T>
-void runTest(int deviceId, int nMB)
+void runTestSimple(int deviceId, int n)
 {
   int blockSize = 256;
   float ms;
@@ -64,7 +71,48 @@ void runTest(int deviceId, int nMB)
   Point<T> *d_a;
   cudaEvent_t startEvent, stopEvent;
     
-  int n = nMB*1024*1024/sizeof(Point<T>);
+//  int n = nMB*1024*1024/sizeof(Point<T>);
+  
+  int nEffectiveMB = n * sizeof(T) / (1024*1024);
+
+  // NB:  d_a(33*nMB) for stride case
+  checkCuda( cudaMalloc(&d_a, n * sizeof(T)) );
+
+  checkCuda( cudaEventCreate(&startEvent) );
+  checkCuda( cudaEventCreate(&stopEvent) );
+
+  printf("Offset, Bandwidth (GB/s):\n");
+  
+  compute<<<n/blockSize, blockSize>>>(d_a); // warm up
+
+  for (int i = 0; i <= 32; i++) {
+    checkCuda( cudaMemset(d_a, 0, n * sizeof(T)) );
+
+    checkCuda( cudaEventRecord(startEvent,0) );
+    compute<<<n/blockSize, blockSize>>>(d_a);
+    checkCuda( cudaEventRecord(stopEvent,0) );
+    checkCuda( cudaEventSynchronize(stopEvent) );
+
+    checkCuda( cudaEventElapsedTime(&ms, startEvent, stopEvent) );
+    printf("%d, %f\n", i, 2*nEffectiveMB/ms);
+  }
+
+  checkCuda( cudaEventDestroy(startEvent) );
+  checkCuda( cudaEventDestroy(stopEvent) );
+  cudaFree(d_a);
+}
+
+template <typename T>
+void runTest(int deviceId, int n)
+{
+  int blockSize = 256;
+  float ms;
+
+  Point<T> *d_a;
+  cudaEvent_t startEvent, stopEvent;
+    
+//  int n = nMB*1024*1024/sizeof(Point<T>);
+  int nEffectiveMB = n * sizeof(T) / (1024*1024);
 
   // NB:  d_a(33*nMB) for stride case
   checkCuda( cudaMalloc(&d_a, n * sizeof(Point<T>)) );
@@ -74,18 +122,18 @@ void runTest(int deviceId, int nMB)
 
   printf("Offset, Bandwidth (GB/s):\n");
   
-  offset<<<n/blockSize, blockSize>>>(d_a, 0); // warm up
+  compute<<<n/blockSize, blockSize>>>(d_a); // warm up
 
   for (int i = 0; i <= 32; i++) {
     checkCuda( cudaMemset(d_a, 0, n * sizeof(Point<T>)) );
 
     checkCuda( cudaEventRecord(startEvent,0) );
-    offset<<<n/blockSize, blockSize>>>(d_a);
+    compute<<<n/blockSize, blockSize>>>(d_a);
     checkCuda( cudaEventRecord(stopEvent,0) );
     checkCuda( cudaEventSynchronize(stopEvent) );
 
     checkCuda( cudaEventElapsedTime(&ms, startEvent, stopEvent) );
-    printf("%d, %f\n", i, 2*nMB/ms);
+    printf("%d, %f\n", i, 2*nEffectiveMB/ms);
   }
 
   checkCuda( cudaEventDestroy(startEvent) );
@@ -95,7 +143,7 @@ void runTest(int deviceId, int nMB)
 
 int main(int argc, char **argv)
 {
-  int nMB = 4;
+  int n = 1000000;
   int deviceId = 0;
   bool bFp64 = false;
 
@@ -112,10 +160,12 @@ int main(int argc, char **argv)
   ;
   checkCuda( cudaGetDeviceProperties(&prop, deviceId) );
   printf("Device: %s\n", prop.name);
-  printf("Transfer size (MB): %d\n", nMB);
+  printf("Transfer size (MB): %d\n", n);
   
   printf("%s Precision\n", bFp64 ? "Double" : "Single");
   
-  if (bFp64) runTest<double>(deviceId, nMB);
-  else       runTest<float>(deviceId, nMB);
+  if (bFp64) runTest<double>(deviceId, n);
+  else       runTest<float>(deviceId, n);
+  if (bFp64) runTestSimple<double>(deviceId, n);
+  else       runTestSimple<float>(deviceId, n);
 }
