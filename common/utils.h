@@ -55,7 +55,6 @@ bool validate_vectors(std::vector<T> const& a, std::vector<T> const& b) {
         return false;
     bool result = true;
     for (unsigned int i=0; i<a.size(); i++) {
-//        std::cout << a[i] << "  " << b[i] << std::endl;
         result &= a[i] == b[i];
     }
     return result;
