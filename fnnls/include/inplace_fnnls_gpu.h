@@ -9,7 +9,7 @@
 template<typename T>
 __host__ __device__
 void
-cpubased_inplace_fnnls(matrix_t<T> const& A,
+gpu_inplace_fnnls(matrix_t<T> const& A,
                   vector_t<T> const& b,
                   vector_t<T>& x,
                   const double eps = 1e-11,
@@ -35,50 +35,14 @@ inline matrix_t<T> transpose_multiply(matrix_t<T> const& A){
 
 template<typename T>
 __host__ __device__
-void cpubased_inplace_fnnls(matrix_t<T> const& A,
+void gpu_inplace_fnnls(matrix_t<T> const& A,
                        vector_t<T> const& b,
                        vector_t<T>& x,
                        const double eps,
                        const unsigned int max_iterations) {
   using data_type = T;
-  // Fast NNLS (fnnls) algorithm as per
-  // http://users.wfu.edu/plemmons/papers/Chennnonneg.pdf
-  // page 8
-
-  // FNNLS memorizes the A^T * A and A^T * b to reduce the computation.
-  // The pseudo-inverse obtained has the same numerical problems so
-  // I keep the same decomposition utilized for NNLS.
-
-  // pseudoinverse (A^T * A)^-1 * A^T
-  // this pseudo-inverse has numerical issues
-  // in order to avoid that I substituted the pseudoinverse whit the QR
-  // decomposition
-
-  // I'm substituting the vectors P and R that represents active and passive set
-  // with a boolean vector: if active_set[i] the i belogns to R else to P
-
-  // bool active_set[VECTOR_SIZE];
-  // memset(active_set, true, VECTOR_SIZE * sizeof(bool));
-
-
   auto nPassive = 0;
   
-  /*
-  #ifdef __CUDA_ARCH__
-  FixedMatrix AtA;
-  matrixMultiplication(A, AtA);
-  __syncthreads();
-  cudaDeviceSynchronize();
-  for(auto i = 0; i < MATRIX_SIZE; ++i){
-    for(auto j = 0; j < MATRIX_SIZE; ++j)
-      printf("%f ", AtA.data()[j* MATRIX_SIZE + i]);
-    printf("\n");
-  }
-  #else
-  FixedMatrix AtA = transpose_multiply(A);
-  #endif
-  assert(AtA == A.transpose() * A);
-  */
 //  matrix_t<data_type> AtA = transpose_multiply(A);
 #ifdef NNLS_DEBUG
   std::cout << "A = \n" << A << std::endl;
