@@ -35,28 +35,92 @@ inline matrix_t<T> transpose_multiply(matrix_t<T> const& A){
 
 template<typename T>
 __host__ __device__
+void gpu_transpose_multiply(matrix_t<T>& AtA, matrix<T> const& A) {
+
+}
+
+template<typename T>
+__host__ __device__
+void gpu_transpose_multiply(matrix_t<T>& Atb, matrix_t<T> const& A, 
+                            vector_t<T> const& b) {
+
+}
+
+template<typename T, unsigned int NCHANNELS>
+__host__ __device__
 void gpu_inplace_fnnls(matrix_t<T> const& A,
                        vector_t<T> const& b,
                        vector_t<T>& x,
                        const double eps,
                        const unsigned int max_iterations) {
-  using data_type = T;
-  auto nPassive = 0;
-  
 //  matrix_t<data_type> AtA = transpose_multiply(A);
 #ifdef NNLS_DEBUG
   std::cout << "A = \n" << A << std::endl;
 #endif
-  matrix_t<data_type> AtA = transpose_multiply(A);
+//  matrix_t<data_type> AtA = transpose_multiply(A);
 //  matrix_t<data_type> AtA = A.transpose() * A;
-  // FixedMatrix AtA = A.transpose() * A;
-  vector_t<data_type> Atb = A.transpose() *b;
-
-  vector_t<data_type> s;
-  vector_t<data_type> w;
+//  FixedMatrix AtA = A.transpose() * A;
+//  vector_t<data_type> Atb = A.transpose() *b;
 
   Eigen::PermutationMatrix<VECTOR_SIZE> permutation;
   permutation.setIdentity();
+
+  // 
+  int imatrix = ...;
+  int ix = ...;
+  int iy = ...;
+  __shared__ matrix_t<T> sAtA[NCHANNELS];
+  __shared__ vector_t<T> sAtb[NCHANNELS];
+  __shared__ vector_t<T> ss[NCHANNELS];
+  __shared__ vector_t<T> sw[NCHANNELS];
+  __shared__ vector_t<T> sx[NCHANNELS];
+  __shared__ unsigned int iterations[NCHANNELS];
+  __shared__ unsigned int nsatisfied[NCHANNELS];
+
+  gpu_transpose_multiply(AtA, A);
+  gpu_transpose_multiply(Atb, A, b);
+
+  while (iterations[imatrix] < max_iterations) {
+      // compute the update
+      const auto nsatisfied_per_matrix = nsatisfied[imatrix];
+      const auto nunsatisfied_per_matrix = MATRIX_SIZE - nunsatisfied_per_matix;
+      // need to select threads to use
+      //if (...)
+      if (ix==0) {
+          T AtAx_vector_element = 0.0;
+#pragma unroll
+          for (unsigned int i=0; i<MATRIX_SIZE; i++)
+              AtAx_vector_element += AtA(iy, i) * sx(i);
+          sw(iy) = Atb(iy) - AtAx_vector_element;
+      }
+      __syncthreads();
+
+      // find the direction of max update -> w coeff
+      Index w_max_idx;
+      T w_max;
+      if (ix==0 && iy==0) {
+          w_max = sw.tail(nActive)
+      }
+      __syncthreads();
+
+      while (npassive[imatrix] > 0) {
+
+          // decrement the #passive elements in the set
+          // sync threads right after
+          // TODO: use cooperative groups to sync threads per matrix
+          if (ix==0 && iy==0)
+              npassive[imatrix]--;
+          __syncthreads();
+      }
+
+      // increment the iterations only for a single thread per matrix
+      // and then synchronize threads not to get data races;
+      // TODO: try to use cooperative thread groups to sync 
+      //       only threads per matrix, not for the whole block
+      if (ix==0 && iy==0)
+          iterations[imatrix]++;
+      __syncthreads();
+  }
 
 #ifdef NNLS_DEBUG
   std::cout << "AtA = \n" << AtA << std::endl;
