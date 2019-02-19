@@ -3,6 +3,7 @@
 
 #include "../common/utils.h"
 #include "include/inplace_fnnls.h"
+#include "include/inplace_fnnls_option0.h"
 
 template<typename T>
 std::vector<vector_t<T>> run_cpu(std::vector<matrix_t<T>> const& As, 
@@ -34,8 +35,9 @@ void kernel_cpubased_inplace_fnnls(matrix_t<T> const* As,
 }
 
 template<typename T>
-std::vector<vector_t<T>> run_gpu_cpubased(std::vector<matrix_t<T>> const& As,
-                                       std::vector<vector_t<T>> const& bs) {
+std::vector<vector_t<T>> run_gpu_option0(std::vector<matrix_t<T>> const& As,
+                                         std::vector<vector_t<T>> const& bs) {
+    std::cout << "*** running gpu option0 ***\n";
     std::vector<vector_t<T>> result(As.size());
     for (auto& v : result)
         v = vector_t<T>::Zero();
@@ -49,23 +51,65 @@ std::vector<vector_t<T>> run_gpu_cpubased(std::vector<matrix_t<T>> const& As,
     cuda::cuda_malloc(d_As, n);
     cuda::cuda_malloc(d_bs, n);
     cuda::cuda_malloc(d_result, n);
-    cuda::assert_if_error("cuda mallocs");
+    cuda::assert_if_error("\tcuda mallocs");
 
     // copy
     cuda::copy_to_dev(d_As, As);
     cuda::copy_to_dev(d_bs, bs);
-    cuda::assert_if_error("cuda memcpy to device");
+    cuda::assert_if_error("\tcuda memcpy to device");
+
+    {
+        dim3 threads{10, 10};
+        int blocks{n};
+        gpu::option0::kernel_inplace_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
+            d_result);
+        cuda::assert_if_error("\tkernel inplace fnnls option0");
+    }
+
+    cuda::copy_to_host(result, d_result);
+    cuda::assert_if_error("\tcuda memcpy back to host");
+
+    cudaFree(d_As);
+    cudaFree(d_bs);
+    cudaFree(d_result);
+
+    return result;
+}
+
+template<typename T>
+std::vector<vector_t<T>> run_gpu_cpubased(std::vector<matrix_t<T>> const& As,
+                                       std::vector<vector_t<T>> const& bs) {
+    std::cout << "*** running gpu cpubased option ***\n";
+    std::vector<vector_t<T>> result(As.size());
+    for (auto& v : result)
+        v = vector_t<T>::Zero();
+
+    // device ptrs
+    matrix_t<T> *d_As;
+    vector_t<T> *d_bs, *d_result;
+    unsigned int n = As.size();
+
+    // allocate on teh device
+    cuda::cuda_malloc(d_As, n);
+    cuda::cuda_malloc(d_bs, n);
+    cuda::cuda_malloc(d_result, n);
+    cuda::assert_if_error("\tcuda mallocs");
+
+    // copy
+    cuda::copy_to_dev(d_As, As);
+    cuda::copy_to_dev(d_bs, bs);
+    cuda::assert_if_error("\tcuda memcpy to device");
 
     {
         int threads{256};
         int blocks{(n + threads - 1) / threads};
         kernel_cpubased_inplace_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
             d_result, n);
-        cuda::assert_if_error("kernel cpubased inplace fnnls");
+        cuda::assert_if_error("\tkernel cpubased inplace fnnls");
     }
 
     cuda::copy_to_host(result, d_result);
-    cuda::assert_if_error("cuda memcpy back to host");
+    cuda::assert_if_error("\tcuda memcpy back to host");
 
     cudaFree(d_As);
     cudaFree(d_bs);
@@ -99,6 +143,7 @@ int main(int argc, char** argv) {
             << results[0] << std::endl;
 #endif // DEBUG
     auto results_gpu = run_gpu_cpubased(As, bs);
+    auto results_gpu_option0 = run_gpu_option0(As, bs);
 #ifdef DEBUG
     std::cout << results_gpu[0] << std::endl;
 #endif 

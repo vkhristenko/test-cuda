@@ -83,7 +83,8 @@ void cpubased_inplace_fnnls(matrix_t<T> const& A,
 #ifdef NNLS_DEBUG
   std::cout << "A = \n" << A << std::endl;
 #endif
-  matrix_t<data_type> AtA = transpose_multiply(A);
+//  matrix_t<data_type> AtA = transpose_multiply(A);
+  matrix_t<data_type> AtA = A.transpose() * A;
 //  matrix_t<data_type> AtA = A.transpose() * A;
   // FixedMatrix AtA = A.transpose() * A;
   vector_t<data_type> Atb = A.transpose() *b;
