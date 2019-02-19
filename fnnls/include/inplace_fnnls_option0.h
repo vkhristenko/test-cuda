@@ -85,7 +85,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
   T result{0.0};
   if (ix==0) {
     for (unsigned int i=0; i<MATRIX_SIZE; i++)
-        result += sAtA(iy, i) * sAtb(i);
+        result += sAtA(i, iy) * sAtb(i);
   }
   __syncthreads();
   if (ix==0)
@@ -94,7 +94,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
   // compute AtA 
   T result1{0.0};
   for (unsigned int i=0; i<MATRIX_SIZE; i++)
-    result1+= sAtA(iy, i) * sAtA(i, ix);
+    result1+= sAtA(i, iy) * sAtA(i, ix);
   __syncthreads();
   sAtA(iy ,ix) = result1;
 
@@ -103,7 +103,8 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
   //
   __syncthreads();
   while (iterations < max_iterations) {
-      auto nactive = MATRIX_SIZE - npassive; // # coeff not fixed
+      if (npassive==10) // all threads (per block) must enter or none
+          break;
 
       // compute the update
       if (ix==0 && iy>=npassive) {
@@ -120,6 +121,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
       __shared__ Index w_max_idx;
       __shared__ T w_max;
       if (ix==0 && iy==0) {
+          auto nactive = MATRIX_SIZE - npassive;
           w_max = sw.tail(nactive).maxCoeff(&w_max_idx);
       }
       __syncthreads();
@@ -134,7 +136,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
       __syncthreads();
 
       // AtA swaps
-      if (ix==npassive && iy==npassive) {
+      if (ix==npassive && iy==npassive) { // diagonal matrix elements
           T tmp = sAtA(npassive, npassive);
           sAtA(npassive, npassive) = sAtA(w_max_idx, w_max_idx); 
           sAtA(w_max_idx, w_max_idx) = tmp;
@@ -142,8 +144,8 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
           T tmp = sAtA(iy, npassive);
           sAtA(iy, npassive) = sAtA(iy, w_max_idx);
           sAtA(iy, w_max_idx) = tmp;
-          sAtA(npassive, iy) = sAtA(w_max_idx, iy);
-          sAtA(w_max_idx, iy) = tmp;
+          sAtA(npassive, iy) = sAtA(iy, npassive);
+          sAtA(w_max_idx, iy) = sAtA(iy, w_max_idx);
       }
 
       // Atb swap
@@ -157,6 +159,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
       if (ix == npassive && iy==w_max_idx)
           Eigen::numext::swap(permutation[npassive],
                               permutation[w_max_idx]);
+      __syncthreads();
 
       if (ix==0 && iy==0)
           npassive++;
@@ -196,7 +199,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
             alpha_idx = 0;
 
             for (unsigned int i=0; i<npassive; i++) {
-                if (ss[i] < 0.) {
+                if (ss[i] <= 0.) {
                     const auto ratio = sx[i] / (sx[i] - ss[i]);
                     if (ratio < alpha) {
                         alpha = ratio;
@@ -233,8 +236,8 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
               T tmp = sAtA(iy, npassive);
               sAtA(iy, npassive) = sAtA(iy, alpha_idx);
               sAtA(iy, alpha_idx) = tmp;
-              sAtA(npassive, iy) = sAtA(alpha_idx, iy);
-              sAtA(alpha_idx, iy) = tmp;
+              sAtA(npassive, iy) = sAtA(iy, npassive);
+              sAtA(alpha_idx, iy) = sAtA(iy, alpha_idx);
           }
 
           // Atb swap
@@ -248,6 +251,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
           if (ix == npassive && iy==w_max_idx)
               Eigen::numext::swap(permutation[npassive],
                                   permutation[alpha_idx]); 
+          __syncthreads();
       }
 
       // increment the iterations only for a single thread per matrix
@@ -264,9 +268,6 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
       auto new_idx = permutation[iy];
       xs[imatrix](new_idx) = sx(iy);
   }
-  
-  // make sure all the guys get here before exiting
-  __syncthreads();
 }
 
 }}

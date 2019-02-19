@@ -159,9 +159,27 @@ int main(int argc, char** argv) {
         std::cout << " }\n";
         for (auto i : cpu_vs_gpu_valid)
             std::cout 
-                << results[i]
                 << "\n************\n"
+                << results[i]
+                << "\n****** vs ******\n"
                 << results_gpu[i] << std::endl;
+    }
+
+    auto gpu_option0_vs_cpu = validation::validate_eigen_vectors(results, results_gpu_option0);
+    if (gpu_option0_vs_cpu.size()==0)
+        std::cout << "+++ cpu vs option0 impl gpu is valid +++\n";
+    else {
+        std::cout << "--- cpu vs option0 impl gpu is not valid ---\n";
+        std::cout << "incorrect list { ";
+        for (auto i : gpu_option0_vs_cpu)
+            std::cout << i << ", ";
+        std::cout << " }\n";
+        for (auto i : gpu_option0_vs_cpu)
+            std::cout 
+                << "\n************\n"
+                << results[i]
+                << "\n******* vs *****\n"
+                << results_gpu_option0[i] << std::endl;
     }
 
     return 0;

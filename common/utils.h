@@ -61,11 +61,11 @@ bool validate_vectors(std::vector<T> const& a, std::vector<T> const& b) {
 }
 
 template<typename M>
-std::vector<unsigned int> 
+std::vector<int> 
 validate_eigen_vectors(std::vector<M> const& a, std::vector<M> const& b) {
     if (a.size() != b.size())
-        return {};
-    std::vector<unsigned int> wrongs;
+        return {-1};
+    std::vector<int> wrongs;
     for (unsigned int i=0; i<a.size(); i++) {
         bool result =  a[i].isApprox(b[i]);
         if (!result) wrongs.push_back(i);
