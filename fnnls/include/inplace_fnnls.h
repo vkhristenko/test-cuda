@@ -60,6 +60,7 @@ void cpubased_inplace_fnnls(matrix_t<T> const& A,
   // bool active_set[VECTOR_SIZE];
   // memset(active_set, true, VECTOR_SIZE * sizeof(bool));
 
+  x = vector_t<T>::Zero();
 
   auto nPassive = 0;
   
@@ -89,10 +90,13 @@ void cpubased_inplace_fnnls(matrix_t<T> const& A,
 
 #ifndef __CUDA_ARCH__
 #ifdef FNNLS_DEBUG_CPU
+    static int __counter__ = 0;
+    if (__counter__ == 113) {
     std::cout << "*** AtA ***" << std::endl;
     std::cout << AtA << std::endl;
     std::cout << "*** Atb ***" << std::endl;
     std::cout << Atb << std::endl;
+    }
 #endif
 #endif
 
@@ -239,7 +243,27 @@ void cpubased_inplace_fnnls(matrix_t<T> const& A,
                           permutation.indices()[alpha_idx]);
 
     }
+#ifndef __CUDA_ARCH__
+#ifdef FNNLS_DEBUG_CPU
+    if (__counter__ == 113) {
+    std::cout << "*** x ***" << std::endl;
+    std::cout << "iteration = " << iter << std::endl;
+    std::cout << x << std::endl;
+    }
+#endif
+#endif
   }
+#ifndef __CUDA_ARCH__
+#ifdef FNNLS_DEBUG_CPU
+    if (__counter__ == 113) {
+    std::cout << "*** x ***" << std::endl;
+    std::cout << x << std::endl;
+    std::cout << "*** final x ***" << std::endl;
+    std::cout << x.transpose() * permutation.transpose() << std::endl;
+    }
+    __counter__++;
+#endif
+#endif
   x = x.transpose() * permutation.transpose();  
 }
 

@@ -15,7 +15,8 @@ std::vector<vector_t<T>> run_cpu(std::vector<matrix_t<T>> const& As,
 
     // compute
     for (unsigned int i=0; i<As.size(); i++) {
-        cpubased_inplace_fnnls(As[i], bs[i], result[i]);
+//        if (i==113)
+            cpubased_inplace_fnnls(As[i], bs[i], result[i]);
     }
 
     return result;
@@ -30,9 +31,24 @@ void kernel_cpubased_inplace_fnnls(matrix_t<T> const* As,
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx < n) {
         // compute per thread
-        cpubased_inplace_fnnls(As[idx], bs[idx], results[idx]);
+//        if (idx==113)
+            cpubased_inplace_fnnls(As[idx], bs[idx], results[idx]);
     }
 }
+
+namespace gpu { namespace option0 {
+
+template<typename T>
+__global__
+void kernel_inplace_fnnls(matrix_t<T> const* As,
+                                  vector_t<T> const* bs,
+                                  vector_t<T>* xs) {
+    int imatrix = blockIdx.x;
+//    if (imatrix==113)
+        inplace_fnnls(As[imatrix], bs[imatrix], xs[imatrix]);
+}
+
+}}
 
 template<typename T>
 std::vector<vector_t<T>> run_gpu_option0(std::vector<matrix_t<T>> const& As,
@@ -41,6 +57,12 @@ std::vector<vector_t<T>> run_gpu_option0(std::vector<matrix_t<T>> const& As,
     std::vector<vector_t<T>> result(As.size());
     for (auto& v : result)
         v = vector_t<T>::Zero();
+
+   cudaEvent_t startE;
+   cudaEvent_t endE;
+
+   cudaEventCreate(&startE);
+   cudaEventCreate(&endE);
 
     // device ptrs
     matrix_t<T> *d_As;
@@ -61,14 +83,22 @@ std::vector<vector_t<T>> run_gpu_option0(std::vector<matrix_t<T>> const& As,
     {
         dim3 threads{10, 10};
         int blocks{n};
+        cudaEventRecord(startE, 0);
         gpu::option0::kernel_inplace_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
             d_result);
+        cudaEventRecord(endE, 0);
+        cudaEventSynchronize(endE);
+        float ms;
+        cudaEventElapsedTime(&ms, startE, endE);
+        printf("\truntime = %f (ms)\n", ms);
         cuda::assert_if_error("\tkernel inplace fnnls option0");
     }
 
     cuda::copy_to_host(result, d_result);
     cuda::assert_if_error("\tcuda memcpy back to host");
 
+    cudaEventDestroy(startE);
+    cudaEventDestroy(endE);
     cudaFree(d_As);
     cudaFree(d_bs);
     cudaFree(d_result);
@@ -83,6 +113,12 @@ std::vector<vector_t<T>> run_gpu_cpubased(std::vector<matrix_t<T>> const& As,
     std::vector<vector_t<T>> result(As.size());
     for (auto& v : result)
         v = vector_t<T>::Zero();
+
+   cudaEvent_t startE;
+   cudaEvent_t endE;
+
+   cudaEventCreate(&startE);
+   cudaEventCreate(&endE);
 
     // device ptrs
     matrix_t<T> *d_As;
@@ -103,14 +139,22 @@ std::vector<vector_t<T>> run_gpu_cpubased(std::vector<matrix_t<T>> const& As,
     {
         int threads{256};
         int blocks{(n + threads - 1) / threads};
+        cudaEventRecord(startE, 0);
         kernel_cpubased_inplace_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
             d_result, n);
+        cudaEventRecord(endE, 0);
+        cudaEventSynchronize(endE);
+        float ms;
+        cudaEventElapsedTime(&ms, startE, endE);
+        printf("\truntime = %f (ms)\n", ms);
         cuda::assert_if_error("\tkernel cpubased inplace fnnls");
     }
 
     cuda::copy_to_host(result, d_result);
     cuda::assert_if_error("\tcuda memcpy back to host");
 
+    cudaEventDestroy(startE);
+    cudaEventDestroy(endE);
     cudaFree(d_As);
     cudaFree(d_bs);
     cudaFree(d_result);
@@ -142,14 +186,15 @@ int main(int argc, char** argv) {
         std::cout 
             << results[0] << std::endl;
 #endif // DEBUG
-    auto results_gpu = run_gpu_cpubased(As, bs);
+//    auto results_gpu = run_gpu_cpubased(As, bs);
     auto results_gpu_option0 = run_gpu_option0(As, bs);
 #ifdef FNNLS_DEBUG_MAIN
-    std::cout << results_gpu[0] << std::endl;
+//    std::cout << results_gpu[0] << std::endl;
     std::cout << "******\n";
     std::cout << results_gpu_option0[0] << std::endl;
 #endif 
 
+    /*
     auto cpu_vs_gpu_valid = validation::validate_eigen_vectors(results, results_gpu);
     if (cpu_vs_gpu_valid.size()==0)
         std::cout << "+++ cpu vs cpubased impl gpu is valid +++\n";
@@ -158,14 +203,14 @@ int main(int argc, char** argv) {
         std::cout << "incorrect list { ";
         for (auto i : cpu_vs_gpu_valid)
             std::cout << i << ", ";
-        std::cout << " }\n";
+        std::cerr << " }\n";
         for (auto i : cpu_vs_gpu_valid)
-            std::cout 
+            std::cerr 
                 << "\n************\n"
                 << results[i]
                 << "\n****** vs ******\n"
                 << results_gpu[i] << std::endl;
-    }
+    }*/
 
     auto gpu_option0_vs_cpu = validation::validate_eigen_vectors(results, results_gpu_option0);
     if (gpu_option0_vs_cpu.size()==0)
@@ -177,8 +222,8 @@ int main(int argc, char** argv) {
             std::cout << i << ", ";
         std::cout << " }\n";
         for (auto i : gpu_option0_vs_cpu)
-            std::cout 
-                << "\n************\n"
+            std::cerr 
+                << "\n****** " << i << " ******\n"
                 << results[i]
                 << "\n******* vs *****\n"
                 << results_gpu_option0[i] << std::endl;

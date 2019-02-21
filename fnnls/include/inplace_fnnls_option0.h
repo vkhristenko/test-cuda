@@ -25,7 +25,7 @@ void load_and_precompute(matrix_t<T>& sAtA, vector_t<T>& sAtb,
     }
     __syncthreads();
     if (ix==0)
-        sAtb(iy) == result;
+        sAtb(iy) = result;
 
     // compute AtA 
     T result1{0.0};
@@ -35,17 +35,16 @@ void load_and_precompute(matrix_t<T>& sAtA, vector_t<T>& sAtb,
     sAtA(iy ,ix) = result1;
 }
 
-
 template<typename T>
-__global__
-void kernel_inplace_fnnls(matrix_t<T> const* As,
-                       vector_t<T> const* bs,
-                       vector_t<T>* xs) {
+__device__
+void inplace_fnnls(matrix_t<T> const& A,
+                       vector_t<T> const& b,
+                       vector_t<T>& x) {
   constexpr double eps = 1e-11;
   constexpr unsigned int max_iterations = 1000;
 
   // 1 block(tx, ty) -> 1 matrix (x, y)
-  int imatrix = blockIdx.x;
+//  int imatrix = blockIdx.x;
   int ix = threadIdx.x;
   int iy = threadIdx.y;
 
@@ -76,9 +75,9 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
   //load_and_precompute(sAtA, sAtb, As[imatrix], b, ix, iy);
   // load A into sAtA
   // load b into sAtb
-  sAtA(iy, ix) = As[imatrix](iy, ix);
+  sAtA(iy, ix) = A(iy, ix);
   if (ix == 0)
-    sAtb(iy) = bs[imatrix](iy);
+    sAtb(iy) = b(iy);
   __syncthreads();
 
   // compute Atb, use threads with ix==0
@@ -99,9 +98,11 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
   sAtA(iy ,ix) = result1;
 
 #ifdef FNNLS_DEBUG_GPU_OPTION0
+  if (blockIdx.x == 113) {
   printf("AtA at %d %d %f\n", iy, ix, sAtA(iy, ix));
   if (ix==0)
       printf("Atb at %d %f\n", iy, sAtb(iy));
+  }
 #endif
 
   //
@@ -109,6 +110,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
   //
   __syncthreads();
   while (iterations < max_iterations) {
+      __syncthreads();
       if (npassive==10) // all threads (per block) must enter or none
           break;
 
@@ -223,13 +225,14 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
               __syncthreads();
               break;
           }
-          
-          if (ix==0 && iy<npassive) {
+          // TODO: understand why we need to sync here...
+          //__syncthreads();
+          if (ix==0 && iy<npassive)
               sx(iy) += alpha * (ss(iy) - sx(iy));
-              if (iy==alpha_idx) {
-                  sx(alpha_idx) = 0;
-                  --npassive;
-              }
+          __syncthreads();
+          if (ix==0 && iy==alpha_idx) {
+              sx(alpha_idx) = 0;
+              --npassive;
           }
           __syncthreads();
 
@@ -260,6 +263,18 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
           __syncthreads();
       }
 
+      __syncthreads();      
+      /*
+#ifdef FNNLS_DEBUG_GPU_OPTION0
+  if (blockIdx.x == 113) {
+  if (ix==0) {
+      printf("sx at %d %f for iteration %d\n", iy, sx(iy), iterations);
+  }
+  }
+#endif
+*/
+
+
       // increment the iterations only for a single thread per matrix
       // and then synchronize threads not to get data races;
       // TODO: try to use cooperative thread groups to sync 
@@ -269,10 +284,19 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
       __syncthreads();
   }
 
+#ifdef FNNLS_DEBUG_GPU_OPTION0
+  if (blockIdx.x == 113) {
+  if (ix==0) {
+      printf("sx at %d %f\n", iy, sx(iy));
+      printf("final s at %d %f\n", iy, sx(permutation[iy]));
+  }
+  }
+#endif
+
   // permute and store the result in global mem
   if (ix==0) {
       auto new_idx = permutation[iy];
-      xs[imatrix](new_idx) = sx(iy);
+      x(new_idx) = sx(iy);
   }
 }
 
