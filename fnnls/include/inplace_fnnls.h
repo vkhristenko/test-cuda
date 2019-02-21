@@ -85,10 +85,19 @@ void cpubased_inplace_fnnls(matrix_t<T> const& A,
 #endif
 //  matrix_t<data_type> AtA = transpose_multiply(A);
   matrix_t<data_type> AtA = A.transpose() * A;
-//  matrix_t<data_type> AtA = A.transpose() * A;
-  // FixedMatrix AtA = A.transpose() * A;
   vector_t<data_type> Atb = A.transpose() *b;
 
+#ifndef __CUDA_ARCH__
+#ifdef FNNLS_DEBUG_CPU
+    std::cout << "*** AtA ***" << std::endl;
+    std::cout << AtA << std::endl;
+    std::cout << "*** Atb ***" << std::endl;
+    std::cout << Atb << std::endl;
+#endif
+#endif
+
+//  matrix_t<data_type> AtA = A.transpose() * A;
+  // FixedMatrix AtA = A.transpose() * A;
   vector_t<data_type> s;
   vector_t<data_type> w;
 

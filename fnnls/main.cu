@@ -138,14 +138,16 @@ int main(int argc, char** argv) {
     
     // run on cpu 
     auto results = run_cpu(As, bs);
-#ifdef DEBUG
+#ifdef FNNLS_DEBUG_MAIN
         std::cout 
             << results[0] << std::endl;
 #endif // DEBUG
     auto results_gpu = run_gpu_cpubased(As, bs);
     auto results_gpu_option0 = run_gpu_option0(As, bs);
-#ifdef DEBUG
+#ifdef FNNLS_DEBUG_MAIN
     std::cout << results_gpu[0] << std::endl;
+    std::cout << "******\n";
+    std::cout << results_gpu_option0[0] << std::endl;
 #endif 
 
     auto cpu_vs_gpu_valid = validation::validate_eigen_vectors(results, results_gpu);

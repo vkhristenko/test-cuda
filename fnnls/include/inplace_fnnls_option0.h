@@ -89,7 +89,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
   }
   __syncthreads();
   if (ix==0)
-    sAtb(iy) == result;
+    sAtb(iy) = result;
 
   // compute AtA 
   T result1{0.0};
@@ -97,6 +97,12 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
     result1+= sAtA(i, iy) * sAtA(i, ix);
   __syncthreads();
   sAtA(iy ,ix) = result1;
+
+#ifdef FNNLS_DEBUG_GPU_OPTION0
+  printf("AtA at %d %d %f\n", iy, ix, sAtA(iy, ix));
+  if (ix==0)
+      printf("Atb at %d %f\n", iy, sAtb(iy));
+#endif
 
   //
   // main loop
