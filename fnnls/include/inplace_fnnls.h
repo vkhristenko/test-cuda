@@ -243,27 +243,8 @@ void cpubased_inplace_fnnls(matrix_t<T> const& A,
                           permutation.indices()[alpha_idx]);
 
     }
-#ifndef __CUDA_ARCH__
-#ifdef FNNLS_DEBUG_CPU
-    if (__counter__ == 113) {
-    std::cout << "*** x ***" << std::endl;
-    std::cout << "iteration = " << iter << std::endl;
-    std::cout << x << std::endl;
-    }
-#endif
-#endif
   }
-#ifndef __CUDA_ARCH__
-#ifdef FNNLS_DEBUG_CPU
-    if (__counter__ == 113) {
-    std::cout << "*** x ***" << std::endl;
-    std::cout << x << std::endl;
-    std::cout << "*** final x ***" << std::endl;
-    std::cout << x.transpose() * permutation.transpose() << std::endl;
-    }
-    __counter__++;
-#endif
-#endif
+  
   x = x.transpose() * permutation.transpose();  
 }
 

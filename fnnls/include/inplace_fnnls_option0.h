@@ -139,6 +139,8 @@ void inplace_fnnls(matrix_t<T> const& A,
       if (w_max < eps)
           break;
 
+      __syncthreads();
+
       if (ix==0 && iy==0)
         w_max_idx += npassive;
       __syncthreads();
@@ -174,8 +176,8 @@ void inplace_fnnls(matrix_t<T> const& A,
 
       // TODO: anything else missing???
       __syncthreads();
-
       while (npassive > 0) {
+          __syncthreads();
           // TODO: can we do better?
           if (ix==0 && iy==0) {
               ss.head(npassive) = sAtA
@@ -226,7 +228,7 @@ void inplace_fnnls(matrix_t<T> const& A,
               break;
           }
           // TODO: understand why we need to sync here...
-          //__syncthreads();
+          __syncthreads();
           if (ix==0 && iy<npassive)
               sx(iy) += alpha * (ss(iy) - sx(iy));
           __syncthreads();
@@ -241,7 +243,9 @@ void inplace_fnnls(matrix_t<T> const& A,
               T tmp = sAtA(npassive, npassive);
               sAtA(npassive, npassive) = sAtA(alpha_idx, alpha_idx); 
               sAtA(alpha_idx, alpha_idx) = tmp;
-          } else if (ix==npassive && iy!=alpha_idx) {
+          }
+          
+          if (ix==npassive && iy!=npassive && iy!=alpha_idx) {
               T tmp = sAtA(iy, npassive);
               sAtA(iy, npassive) = sAtA(iy, alpha_idx);
               sAtA(iy, alpha_idx) = tmp;
@@ -264,16 +268,6 @@ void inplace_fnnls(matrix_t<T> const& A,
       }
 
       __syncthreads();      
-      /*
-#ifdef FNNLS_DEBUG_GPU_OPTION0
-  if (blockIdx.x == 113) {
-  if (ix==0) {
-      printf("sx at %d %f for iteration %d\n", iy, sx(iy), iterations);
-  }
-  }
-#endif
-*/
-
 
       // increment the iterations only for a single thread per matrix
       // and then synchronize threads not to get data races;
@@ -283,15 +277,6 @@ void inplace_fnnls(matrix_t<T> const& A,
           iterations++;
       __syncthreads();
   }
-
-#ifdef FNNLS_DEBUG_GPU_OPTION0
-  if (blockIdx.x == 113) {
-  if (ix==0) {
-      printf("sx at %d %f\n", iy, sx(iy));
-      printf("final s at %d %f\n", iy, sx(permutation[iy]));
-  }
-  }
-#endif
 
   // permute and store the result in global mem
   if (ix==0) {
