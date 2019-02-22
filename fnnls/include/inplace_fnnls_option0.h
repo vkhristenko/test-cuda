@@ -97,6 +97,10 @@ void inplace_fnnls(matrix_t<T> const& A,
   __syncthreads();
   sAtA(iy ,ix) = result1;
 
+  if (ix==0) {
+      sx(iy) = 0;
+  }
+
 #ifdef FNNLS_DEBUG_GPU_OPTION0
   if (blockIdx.x == 113) {
   printf("AtA at %d %d %f\n", iy, ix, sAtA(iy, ix));
@@ -111,8 +115,10 @@ void inplace_fnnls(matrix_t<T> const& A,
   __syncthreads();
   while (iterations < max_iterations) {
       __syncthreads();
-      if (npassive==10) // all threads (per block) must enter or none
+      if (npassive==10) { // all threads (per block) must enter or none
+          __syncthreads();
           break;
+      }
 
       // compute the update
       if (ix==0 && iy>=npassive) {
@@ -136,8 +142,10 @@ void inplace_fnnls(matrix_t<T> const& A,
 
       // upon satisfying this condition, all threads of the block should jump out
       // TODO: does my logic hold?
-      if (w_max < eps)
+      if (w_max < eps) {
+          __syncthreads(); // TODO: do we need this guy
           break;
+      }
 
       __syncthreads();
 
@@ -150,7 +158,8 @@ void inplace_fnnls(matrix_t<T> const& A,
           T tmp = sAtA(npassive, npassive);
           sAtA(npassive, npassive) = sAtA(w_max_idx, w_max_idx); 
           sAtA(w_max_idx, w_max_idx) = tmp;
-      } else if (ix==npassive && iy!=w_max_idx) {
+      }
+      if (ix==npassive && iy!=w_max_idx && iy!=npassive) {
           T tmp = sAtA(iy, npassive);
           sAtA(iy, npassive) = sAtA(iy, w_max_idx);
           sAtA(iy, w_max_idx) = tmp;
@@ -204,6 +213,7 @@ void inplace_fnnls(matrix_t<T> const& A,
           __shared__ T alpha;
           __shared__ Index alpha_idx;
           
+          __syncthreads();
           if (ix==0 && iy==0) {
             alpha = std::numeric_limits<T>::max();
             alpha_idx = 0;
@@ -244,7 +254,6 @@ void inplace_fnnls(matrix_t<T> const& A,
               sAtA(npassive, npassive) = sAtA(alpha_idx, alpha_idx); 
               sAtA(alpha_idx, alpha_idx) = tmp;
           }
-          
           if (ix==npassive && iy!=npassive && iy!=alpha_idx) {
               T tmp = sAtA(iy, npassive);
               sAtA(iy, npassive) = sAtA(iy, alpha_idx);
@@ -266,7 +275,6 @@ void inplace_fnnls(matrix_t<T> const& A,
                                   permutation[alpha_idx]); 
           __syncthreads();
       }
-
       __syncthreads();      
 
       // increment the iterations only for a single thread per matrix

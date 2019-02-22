@@ -46,6 +46,7 @@ void kernel_inplace_fnnls(matrix_t<T> const* As,
     int imatrix = blockIdx.x;
 //    if (imatrix==113)
         inplace_fnnls(As[imatrix], bs[imatrix], xs[imatrix]);
+    __syncthreads();
 }
 
 }}
@@ -186,15 +187,14 @@ int main(int argc, char** argv) {
         std::cout 
             << results[0] << std::endl;
 #endif // DEBUG
-//    auto results_gpu = run_gpu_cpubased(As, bs);
+    auto results_gpu = run_gpu_cpubased(As, bs);
     auto results_gpu_option0 = run_gpu_option0(As, bs);
 #ifdef FNNLS_DEBUG_MAIN
-//    std::cout << results_gpu[0] << std::endl;
+    std::cout << results_gpu[0] << std::endl;
     std::cout << "******\n";
     std::cout << results_gpu_option0[0] << std::endl;
 #endif 
 
-    /*
     auto cpu_vs_gpu_valid = validation::validate_eigen_vectors(results, results_gpu);
     if (cpu_vs_gpu_valid.size()==0)
         std::cout << "+++ cpu vs cpubased impl gpu is valid +++\n";
@@ -209,8 +209,11 @@ int main(int argc, char** argv) {
                 << "\n************\n"
                 << results[i]
                 << "\n****** vs ******\n"
-                << results_gpu[i] << std::endl;
-    }*/
+                << results_gpu[i] << std::endl
+                << "***** diff *****\n"
+                << results[i] - results_gpu[i]
+                << std::endl;
+    }
 
     auto gpu_option0_vs_cpu = validation::validate_eigen_vectors(results, results_gpu_option0);
     if (gpu_option0_vs_cpu.size()==0)
@@ -226,7 +229,10 @@ int main(int argc, char** argv) {
                 << "\n****** " << i << " ******\n"
                 << results[i]
                 << "\n******* vs *****\n"
-                << results_gpu_option0[i] << std::endl;
+                << results_gpu_option0[i] << std::endl
+                << "**** diff ****\n"
+                << results[i] - results_gpu_option0[i]
+                << std::endl;
     }
 
     return 0;
