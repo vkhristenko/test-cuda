@@ -11,24 +11,6 @@ constexpr int dim = 16;
 template<typename T>
 using matrix_t = Eigen::Matrix<T, dim, dim>;
 
-template<typename T, int BLOCK_SIZE>
-__global__
-void kernel_mat_mult_eigen(matrix_t<T> const* A, matrix_t<T> const* B,
-                           matrix_t<T> *C, unsigned int size) {
-    int bid = blockIdx.x;
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int imat = bid * blockDim.x * blockDim.y;
-    int ielem = ty * blockDim.x + tx;
-
-    __shared__ matrix_t<T> As;
-    __shared__ matrix_t<T> Bs;
-
-    // would like to just do As
-    As(ty, tx) = A[bid](ty, tx);
-    Bs(ty, tx) = B[bid](ty, tx);
-}
-
 template<typename T>
 __global__
 void kernel_mat_mult_eigen(matrix_t<T> const* A, matrix_t<T> const* B,
