@@ -1,4 +1,5 @@
 #include <iostream>
+#include <chrono>
 #include <vector>
 
 #include "../common/utils.h"
@@ -15,10 +16,14 @@ std::vector<vector_t<T>> run_cpu(std::vector<matrix_t<T>> const& As,
         v = vector_t<T>::Zero();
 
     // compute
+    auto t1 = std::chrono::high_resolution_clock::now();
     for (unsigned int i=0; i<As.size(); i++) {
 //        if (i==113)
             cpubased_inplace_fnnls(As[i], bs[i], result[i]);
     }
+    auto t2 = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2-t1);
+    std::cout << "cpu runtime = " << duration.count() << " (ms)\n";
 
     return result;
 }
