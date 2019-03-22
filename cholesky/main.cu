@@ -20,7 +20,8 @@ void kernel_cholesky(matrix_t<T> const* As,
                      unsigned int n) {
     int idx = threadIdx.x + blockDim.x*blockIdx.x;
     if (idx < n) {
-        Ls[idx] = As[idx].llt().matrixL();
+        for (unsigned int i=0; i<100; i++)
+            Ls[idx] = As[idx].llt().matrixL();
     }
 }
 
