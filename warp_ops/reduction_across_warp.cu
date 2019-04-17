@@ -13,7 +13,7 @@ void warpReduct() {
 }
 
 int main() {
-    warpReduct<<<1, 32>>>();
+    warpReduct<<<1, 45>>>();
     cudaDeviceSynchronize();
 
     return 0;

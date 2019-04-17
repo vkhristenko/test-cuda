@@ -19,22 +19,6 @@ using namespace Eigen;
 
 template<typename T>
 __host__ __device__
-inline matrix_t<T> transpose_multiply(matrix_t<T> const& A){
-  matrix_t<T> result;
-  for(auto i = 0; i < MATRIX_SIZE; ++i){    
-    for(auto j = i; j < MATRIX_SIZE; ++j){
-      result.data()[j*MATRIX_SIZE + i] = 0;
-      for(auto k = 0; k < MATRIX_SIZE; ++k)
-        result.data()[j*MATRIX_SIZE + i] += A.data()[i*MATRIX_SIZE+k]*A.data()[j*MATRIX_SIZE+k];
-      result.data()[i*MATRIX_SIZE + j] = result.data()[j*MATRIX_SIZE + i];
-    }
-    // result = result.selfadjointView<Eigen::Upper>();
-  }
-  return result;
-}
-
-template<typename T>
-__host__ __device__
 void cpubased_inplace_fnnls(matrix_t<T> const& A,
                        vector_t<T> const& b,
                        vector_t<T>& x,
@@ -64,22 +48,6 @@ void cpubased_inplace_fnnls(matrix_t<T> const& A,
 
   auto nPassive = 0;
   
-  /*
-  #ifdef __CUDA_ARCH__
-  FixedMatrix AtA;
-  matrixMultiplication(A, AtA);
-  __syncthreads();
-  cudaDeviceSynchronize();
-  for(auto i = 0; i < MATRIX_SIZE; ++i){
-    for(auto j = 0; j < MATRIX_SIZE; ++j)
-      printf("%f ", AtA.data()[j* MATRIX_SIZE + i]);
-    printf("\n");
-  }
-  #else
-  FixedMatrix AtA = transpose_multiply(A);
-  #endif
-  assert(AtA == A.transpose() * A);
-  */
 //  matrix_t<data_type> AtA = transpose_multiply(A);
 #ifdef NNLS_DEBUG
   std::cout << "A = \n" << A << std::endl;
