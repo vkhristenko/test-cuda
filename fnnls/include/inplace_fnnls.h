@@ -6,10 +6,12 @@
 #define NNLS_DEBUG
 #undef NNLS_DEBUG
 
+namespace v1 {
+
 template<typename T>
 __host__ __device__
 void
-cpubased_inplace_fnnls(matrix_t<T> const& A,
+fnnls(matrix_t<T> const& A,
                   vector_t<T> const& b,
                   vector_t<T>& x,
                   const double eps = 1e-11,
@@ -19,7 +21,7 @@ using namespace Eigen;
 
 template<typename T>
 __host__ __device__
-void cpubased_inplace_fnnls(matrix_t<T> const& A,
+void fnnls(matrix_t<T> const& A,
                        vector_t<T> const& b,
                        vector_t<T>& x,
                        const double eps,
@@ -214,6 +216,8 @@ void cpubased_inplace_fnnls(matrix_t<T> const& A,
   }
   
   x = x.transpose() * permutation.transpose();  
+}
+
 }
 
 #endif
