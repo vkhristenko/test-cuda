@@ -75,9 +75,6 @@ void fnnls(matrix_t<T> const& A,
   vector_t<data_type> s;
   vector_t<data_type> w;
 
-  Eigen::PermutationMatrix<VECTOR_SIZE> permutation;
-  permutation.setIdentity();
-
 #ifdef NNLS_DEBUG
   std::cout << "AtA = \n" << AtA << std::endl;
   std::cout << "Atb = \n" << Atb << std::endl;
@@ -136,13 +133,6 @@ void fnnls(matrix_t<T> const& A,
     // swap Atb to match with AtA
     Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(w_max_idx));
     Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(w_max_idx));
-    // swap the permutation matrix to reorder the solution in the end
-    Eigen::numext::swap(permutation.indices()[nPassive],
-                        permutation.indices()[w_max_idx]);
-
-#ifdef NNLS_DEBUG
-    std::cout << "permutation = \n" << permutation.indices() << std::endl;
-#endif
 
     ++nPassive;
 
@@ -208,14 +198,9 @@ void fnnls(matrix_t<T> const& A,
       // swap Atb to match with AtA
       Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(alpha_idx));
       Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(alpha_idx));
-      // swap the permutation matrix to reorder the solution in the end
-      Eigen::numext::swap(permutation.indices()[nPassive],
-                          permutation.indices()[alpha_idx]);
 
     }
   }
-  
-  x = x.transpose() * permutation.transpose();  
 }
 
 }

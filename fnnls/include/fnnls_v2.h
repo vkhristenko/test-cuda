@@ -20,94 +20,59 @@ fnnls(matrix_t<T> const& A,
 using namespace Eigen;
 
 template<typename T>
-__device__
-void fnnls(matrix_t<T> const& A,
-                       vector_t<T> const& b,
-                       vector_t<T>& x,
-                       const double eps,
-                       const unsigned int max_iterations) {
-  using data_type = T;
+__global__
+void kernel_compute_update_vector() {
 
-  x = vector_t<T>::Zero();
+    w.tail(nActive) = Atb.tail(nActive) - (AtA * x).tail(nActive);
+    Index w_max_idx; 
+    const auto max_w = w.tail(nActive).maxCoeff(&w_max_idx);
+         
+    // check for convergence
+    if (max_w < eps)
+    break;
+    
+    // need to translate the index into the right part of the vector
+    w_max_idx += nPassive;
+        62     
+             63     // swap AtA to avoid copy
+              64     AtA.col(nPassive).swap(AtA.col(w_max_idx));
+         65     AtA.row(nPassive).swap(AtA.row(w_max_idx));
+          66     // swap Atb to match with AtA
+               67     Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(w_max_idx));
+           68     Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(w_max_idx));
+
+}
+
+template<typename T>
+__device__
+void fnnls(matrix_t<T>& AtA,
+           vector_t<T>& Atb,
+           vector_t<T>& x,
+           vector_t<T>& s,
+           vector_t<T>& w,
+           const double eps,
+           const unsigned int max_iterations) {
+  using data_type = T;
 
   auto nPassive = 0;
   
-//  matrix_t<data_type> AtA = transpose_multiply(A);
-#ifdef NNLS_DEBUG
-  std::cout << "A = \n" << A << std::endl;
-#endif
-//  matrix_t<data_type> AtA = transpose_multiply(A);
-  matrix_t<data_type> AtA = A.transpose() * A;
-  vector_t<data_type> Atb = A.transpose() *b;
-
-#ifndef __CUDA_ARCH__
-#ifdef FNNLS_DEBUG_CPU
-    static int __counter__ = 0;
-    if (__counter__ == 113) {
-    std::cout << "*** AtA ***" << std::endl;
-    std::cout << AtA << std::endl;
-    std::cout << "*** Atb ***" << std::endl;
-    std::cout << Atb << std::endl;
-    }
-#endif
-#endif
-
-//  matrix_t<data_type> AtA = A.transpose() * A;
-  // FixedMatrix AtA = A.transpose() * A;
-  vector_t<data_type> s;
-  vector_t<data_type> w;
-
-  Eigen::PermutationMatrix<VECTOR_SIZE> permutation;
-  permutation.setIdentity();
-
-#ifdef NNLS_DEBUG
-  std::cout << "AtA = \n" << AtA << std::endl;
-  std::cout << "Atb = \n" << Atb << std::endl;
-#endif
-
 // main loop
   for (auto iter = 0; iter < max_iterations; ++iter) {
+
     const auto nActive = VECTOR_SIZE - nPassive;
-
-#ifdef NNLS_DEBUG
-    std::cout << "***************\n"
-        << "iteration = " << iter << std::endl
-        << "nactive = " << nActive << std::endl;
-    std::cout << "x = \n" << x << std::endl;
-#endif
-
-#ifdef DEBUG_FNNLS_CPU
-    cout << "iter " << iter << endl;
-#endif
-    
     if(!nActive)
       break;
 
-#ifdef NNLS_DEBUG
-    std::cout << "AtA * x = \n" << AtA*x << std::endl;
-#endif
+    // launch 1 kernel per each thread
+    kernel_compute_update_vector<<<...>>>();
+    cudaDeviceSynchronize();
 
-    w.tail(nActive) = Atb.tail(nActive) - (AtA * x).tail(nActive);
-
-#ifdef DEBUG_FNNLS_CPU
-    cout << "w" << endl << w.tail(nActive) << endl;
-#endif
-    // get the index of w that gives the maximum gain
-    Index w_max_idx;
-    const auto max_w = w.tail(nActive).maxCoeff(&w_max_idx);
-
-#ifdef NNLS_DEBUG
-    std::cout << "w = \n" << w << std::endl;
-    std::cout << "max_w = " << max_w << std::endl;
-    std::cout << "w_max_idx = " << w_max_idx << std::endl;
-#endif
+    auto const max_w = g_max_w[idx];
+    auto const max_w_idx = g_max_w_idx[idx];
 
     // check for convergence
     if (max_w < eps)
       break;
-
-    // cout << "n active " << nActive << endl;
-    // cout << "w max idx " << w_max_idx << endl;
 
     // need to translate the index into the right part of the vector
     w_max_idx += nPassive;
@@ -118,43 +83,22 @@ void fnnls(matrix_t<T> const& A,
     // swap Atb to match with AtA
     Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(w_max_idx));
     Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(w_max_idx));
-    // swap the permutation matrix to reorder the solution in the end
-    Eigen::numext::swap(permutation.indices()[nPassive],
-                        permutation.indices()[w_max_idx]);
-
-#ifdef NNLS_DEBUG
-    std::cout << "permutation = \n" << permutation.indices() << std::endl;
-#endif
 
     ++nPassive;
-
-#ifdef DEBUG_FNNLS_CPU
-    cout << "max index " << w_max_idx << endl;
-    std::cout << "n_active " << nActive << std::endl;
-#endif
 
 // inner loop
     while (nPassive > 0) {
       s.head(nPassive) =
           AtA.topLeftCorner(nPassive, nPassive).llt().solve(Atb.head(nPassive));
 
-#ifdef NNLS_DEBUG
-      std::cout << "s = \n" << s << std::endl;
-#endif
-
       if (s.head(nPassive).minCoeff() > 0.) {
         x.head(nPassive) = s.head(nPassive);
         break;
       }
 
-#ifdef DEBUG_FNNLS_CPU
-      cout << "s" << endl << s.head(nPassive) << endl;
-#endif
-
       auto alpha = std::numeric_limits<double>::max();
       Index alpha_idx = 0;
 
-#pragma unroll VECTOR_SIZE
       for (auto i = 0; i < nPassive; ++i) {
         if (s[i] <= 0.) {
           auto const ratio = x[i] / (x[i] - s[i]);
@@ -170,34 +114,17 @@ void fnnls(matrix_t<T> const& A,
         break;
       }
 
-#ifdef DEBUG_FNNLS_CPU
-
-      cout << "alpha " << alpha << endl;
-
-      cout << "x before" << endl << x << endl;
-
-#endif
-
       x.head(nPassive) += alpha * (s.head(nPassive) - x.head(nPassive));
       x[alpha_idx] = 0;
       --nPassive;
 
-#ifdef DEBUG_FNNLS_CPU
-      cout << "x after" << endl << x << endl;
-#endif
       AtA.col(nPassive).swap(AtA.col(alpha_idx));
       AtA.row(nPassive).swap(AtA.row(alpha_idx));
       // swap Atb to match with AtA
       Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(alpha_idx));
       Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(alpha_idx));
-      // swap the permutation matrix to reorder the solution in the end
-      Eigen::numext::swap(permutation.indices()[nPassive],
-                          permutation.indices()[alpha_idx]);
-
     }
   }
-  
-  x = x.transpose() * permutation.transpose();  
 }
 
 }
