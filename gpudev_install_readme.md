@@ -48,7 +48,10 @@ _We have Tesla Architecture V100 card_
 ### 3. Follow something
 - [Installation Guide](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html) goes directly to install _CUDA_ distribution. 
 - I followed [this](https://www.advancedclustering.com/act_kb/installing-nvidia-drivers-rhel-centos-7/) to install just drivers. worked 100%. 
- - It might complain - ignore
+ - It might complain as below - _ignore_
  ```
- WARNING: nvidia-installer was forced to guess the X library path '/usr/lib64' and X module path '/usr/lib64/xorg/modules'; these paths were not queryable from the system.  If X fails to find the NVIDIA X driver module, please install the `pkg-config` utility and the X.Org SDK/development package for your distribution and reinstall the driver.
+ WARNING: nvidia-installer was forced to guess the X library path '/usr/lib64' and X module path '/usr/lib64/xorg/modules'; 
+ these paths were not queryable from the system.  
+ If X fails to find the NVIDIA X driver module, please install the `pkg-config` 
+ utility and the X.Org SDK/development package for your distribution and reinstall the driver.
  ```
