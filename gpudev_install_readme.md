@@ -163,3 +163,37 @@ Checking computed result for correctness: Result = PASS
 NOTE: The CUDA Samples are not meant for performancemeasurements. Results may vary when GPU Boost is enabled.
 [root@bench-dev-gpu samples]#
 ```
+
+## Install Nvidia Container Runtime for Docker
+- __follow [github](https://github.com/NVIDIA/nvidia-docker)__
+- Testing, 
+```
+[cmscuda@bench-dev-gpu ~]$ sudo docker run --runtime=nvidia --rm nvidia/cuda:10.1-base nvidia-smi
+Unable to find image 'nvidia/cuda:10.1-base' locally
+10.1-base: Pulling from nvidia/cuda
+6abc03819f3e: Already exists 
+05731e63f211: Already exists 
+0bd67c50d6be: Already exists 
+1c6bf26fb1a2: Pull complete 
+2441b24dccf8: Pull complete 
+7659dedf21d9: Pull complete 
+Digest: sha256:66ff549fb856911231bf23e3e1d05d83d57bc3afa21d3f1298f7a1d051946bbd
+Status: Downloaded newer image for nvidia/cuda:10.1-base
+Wed May 22 12:51:01 2019       
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 430.14       Driver Version: 430.14       CUDA Version: 10.2     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|===============================+======================+======================|
+|   0  Tesla V100-PCIE...  Off  | 00000000:00:05.0 Off |                    0 |
+| N/A   42C    P0    37W / 250W |      0MiB / 32510MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+                                                                               
++-----------------------------------------------------------------------------+
+| Processes:                                                       GPU Memory |
+|  GPU       PID   Type   Process name                             Usage      |
+|=============================================================================|
+|  No running processes found                                                 |
++-----------------------------------------------------------------------------+
+```
