@@ -199,6 +199,8 @@ Wed May 22 12:51:01 2019
 ```
 
 ## Running on Nvidia GPU from a container
+- Run a simple example of summing of N numbers on gpu from docker
+- `test-cuda` repo contains __vsum__ src code, we just share it with the container.
 ```
 [cmscuda@bench-dev-gpu ~]$ sudo docker run -v /home/cmscuda:/shared --runtime=nvidia -it nvidia/cuda:10.1-devel /bin/bash
 Unable to find image 'nvidia/cuda:10.1-devel' locally
