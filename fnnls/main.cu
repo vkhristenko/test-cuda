@@ -16,7 +16,7 @@ std::vector<vector_t<T>> run_cpu(std::vector<matrix_t<T>> const& As,
     // compute
     auto t1 = std::chrono::high_resolution_clock::now();
     for (unsigned int i=0; i<As.size(); i++) {
-            cpubased_inplace_fnnls(As[i], bs[i], result[i]);
+        v1::fnnls(As[i], bs[i], result[i]);
     }
     auto t2 = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2-t1);
@@ -27,13 +27,13 @@ std::vector<vector_t<T>> run_cpu(std::vector<matrix_t<T>> const& As,
 
 template<typename T>
 __global__
-void kernel_cpubased_inplace_fnnls(matrix_t<T> const* As, 
+void kernel_fnnls(matrix_t<T> const* As, 
                           vector_t<T> const* bs,
                           vector_t<T>* results,
                           unsigned int n) {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx < n) {
-            cpubased_inplace_fnnls(As[idx], bs[idx], results[idx]);
+        v1::fnnls(As[idx], bs[idx], results[idx]);
     }
 }
 
@@ -73,13 +73,14 @@ std::vector<vector_t<T>> run_gpu_cpubased(std::vector<matrix_t<T>> const& As,
         int blocks{(n + threads - 1) / threads};
         // warm up
         std::cout << "*** warming up ***\n";
-        kernel_cpubased_inplace_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
+        kernel_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
             d_result, n);
 
         // measure
+        std::cout << "*** running ****\n";
         for (unsigned int i=0; i<10; i++) {
             cudaEventRecord(startE, 0);
-            kernel_cpubased_inplace_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
+            kernel_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
                 d_result, n);
             cudaEventRecord(endE, 0);
             cudaEventSynchronize(endE);

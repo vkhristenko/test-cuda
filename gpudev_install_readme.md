@@ -166,3 +166,132 @@ Checking computed result for correctness: Result = PASS
 NOTE: The CUDA Samples are not meant for performancemeasurements. Results may vary when GPU Boost is enabled.
 [root@bench-dev-gpu samples]#
 ```
+
+## Install Nvidia Container Runtime for Docker
+- __follow [github](https://github.com/NVIDIA/nvidia-docker)__
+- Testing, 
+```
+[cmscuda@bench-dev-gpu ~]$ sudo docker run --runtime=nvidia --rm nvidia/cuda:10.1-base nvidia-smi
+Unable to find image 'nvidia/cuda:10.1-base' locally
+10.1-base: Pulling from nvidia/cuda
+6abc03819f3e: Already exists 
+05731e63f211: Already exists 
+0bd67c50d6be: Already exists 
+1c6bf26fb1a2: Pull complete 
+2441b24dccf8: Pull complete 
+7659dedf21d9: Pull complete 
+Digest: sha256:66ff549fb856911231bf23e3e1d05d83d57bc3afa21d3f1298f7a1d051946bbd
+Status: Downloaded newer image for nvidia/cuda:10.1-base
+Wed May 22 12:51:01 2019       
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 430.14       Driver Version: 430.14       CUDA Version: 10.2     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|===============================+======================+======================|
+|   0  Tesla V100-PCIE...  Off  | 00000000:00:05.0 Off |                    0 |
+| N/A   42C    P0    37W / 250W |      0MiB / 32510MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+                                                                               
++-----------------------------------------------------------------------------+
+| Processes:                                                       GPU Memory |
+|  GPU       PID   Type   Process name                             Usage      |
+|=============================================================================|
+|  No running processes found                                                 |
++-----------------------------------------------------------------------------+
+```
+
+## Running on Nvidia GPU from a container
+- Run a simple example of summing of N numbers on gpu from docker
+- `test-cuda` repo contains __vsum__ src code, we just share it with the container.
+```
+[cmscuda@bench-dev-gpu ~]$ sudo docker run -v /home/cmscuda:/shared --runtime=nvidia -it nvidia/cuda:10.1-devel /bin/bash
+Unable to find image 'nvidia/cuda:10.1-devel' locally
+10.1-devel: Pulling from nvidia/cuda
+6abc03819f3e: Already exists 
+05731e63f211: Already exists 
+0bd67c50d6be: Already exists 
+1c6bf26fb1a2: Already exists 
+2441b24dccf8: Already exists 
+7659dedf21d9: Already exists 
+7104ad1e672e: Pull complete 
+6e142f33f4b1: Pull complete 
+Digest: sha256:f4aeed30cd088d5399c928e9b1cfc4481737d614f7133fb50a683ac13787ab50
+Status: Downloaded newer image for nvidia/cuda:10.1-devel
+root@d0e946647352:/# ls
+bin   dev  home  lib64  mnt  proc  run   shared  sys  usr
+boot  etc  lib   media  opt  root  sbin  srv     tmp  var
+root@d0e946647352:/# 
+root@d0e946647352:/# 
+root@d0e946647352:/# ls /usr/local/cuda
+LICENSE  bin     doc     include  nvml  share  targets
+README   compat  extras  lib64    nvvm  src    version.txt
+root@d0e946647352:/# ls /usr/local/cuda/bin/
+bin2c     cuda-gdbserver  cuobjdump            nvcc          nvlink   ptxas
+crt       cuda-memcheck   fatbinary            nvcc.profile  nvprof
+cuda-gdb  cudafe++        gpu-library-advisor  nvdisasm      nvprune
+root@d0e946647352:/# ls
+bin   dev  home  lib64  mnt  proc  run   shared  sys  usr
+boot  etc  lib   media  opt  root  sbin  srv     tmp  var
+root@d0e946647352:/# 
+root@d0e946647352:/# g++
+g++: fatal error: no input files
+compilation terminated.
+root@d0e946647352:/# g++ --version
+g++ (Ubuntu 7.4.0-1ubuntu1~18.04) 7.4.0
+Copyright (C) 2017 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+root@d0e946647352:/# ls
+bin   dev  home  lib64  mnt  proc  run   shared  sys  usr
+boot  etc  lib   media  opt  root  sbin  srv     tmp  var
+root@d0e946647352:/# 
+root@d0e946647352:/# 
+root@d0e946647352:/# 
+root@d0e946647352:/# 
+root@d0e946647352:/# ls
+bin   dev  home  lib64  mnt  proc  run   shared  sys  usr
+boot  etc  lib   media  opt  root  sbin  srv     tmp  var
+root@d0e946647352:/# 
+root@d0e946647352:/# 
+root@d0e946647352:/# 
+root@d0e946647352:/# cd /shared/
+root@d0e946647352:/shared# ls
+NVIDIA-Linux-x86_64-430.14.run  cmssw_configs                   standalone_setup.sh
+cms                             cuda_10.1.168_418.67_linux.run  test-cuda
+cmssw_area                      data                            test.cpp
+root@d0e946647352:/shared# cd test-cuda/
+root@d0e946647352:/shared/test-cuda# ls
+README.md  fnnls                     mandelbrote          streams  warp_ops
+cholesky   gpudev_install_readme.md  many_small_matrices  vadd
+common     load_store_coalescence    permutation          vsum
+root@d0e946647352:/shared/test-cuda# 
+root@d0e946647352:/shared/test-cuda# 
+root@d0e946647352:/shared/test-cuda# 
+root@d0e946647352:/shared/test-cuda# cd vsum/
+root@d0e946647352:/shared/test-cuda/vsum# ls
+Makefile  vsum  vsum.cu
+root@d0e946647352:/shared/test-cuda/vsum# make clean
+rm vsum
+root@d0e946647352:/shared/test-cuda/vsum# ls
+Makefile  vsum.cu
+root@d0e946647352:/shared/test-cuda/vsum# make
+nvcc -arch=sm_61 -std=c++14 -lineinfo -Xptxas -v -o vsum vsum.cu
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_Z11kernel_vsumIiEvPT_j' for 'sm_61'
+ptxas info    : Function properties for _Z11kernel_vsumIiEvPT_j
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, 332 bytes cmem[0]
+root@d0e946647352:/shared/test-cuda/vsum# ./vsum 
+Segmentation fault (core dumped)
+root@d0e946647352:/shared/test-cuda/vsum# ./vsum 1000
+checking cuda mallocs
+checking copying host to device
+checking vsum kernel
+checking copying device to host
+results valid 499500 vs 499500
+root@d0e946647352:/shared/test-cuda/vsum# exit
+exit
+[cmscuda@bench-dev-gpu ~]$ 
+```
