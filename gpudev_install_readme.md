@@ -84,6 +84,9 @@ Mon May 20 18:06:58 2019
 - install _CUDA Toolkit_, excluding driver installation.
  - note, that it is also possible to not install drivers separately... but to pull them with cuda toolkit
 
+## Where is CUDA Stuff...
+- 
+
 ## Testing CUDA Samples
 - samples are in `/usr/local/cuda/samples`
 - _Already compiled_
