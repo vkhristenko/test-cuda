@@ -4,6 +4,7 @@
 
 #include "../common/utils.h"
 #include "include/inplace_fnnls.h"
+#include "include/fnnls_no_mm_mv.h"
 
 template<typename T>
 std::vector<vector_t<T>> run_cpu(std::vector<matrix_t<T>> const& As, 
@@ -27,7 +28,7 @@ std::vector<vector_t<T>> run_cpu(std::vector<matrix_t<T>> const& As,
 
 template<typename T>
 __global__
-void kernel_fnnls(matrix_t<T> const* As, 
+void kernel_inplace_fnnls(matrix_t<T> const* As, 
                           vector_t<T> const* bs,
                           vector_t<T>* results,
                           unsigned int n) {
@@ -35,6 +36,169 @@ void kernel_fnnls(matrix_t<T> const* As,
     if (idx < n) {
         v1::fnnls(As[idx], bs[idx], results[idx]);
     }
+}
+
+namespace v2 {
+
+//
+// perform AtA and Atb mm and mv mults
+//
+template<typename T, int MSIZE>
+__global__
+void kernel_mults(
+        matrix_t<T> const* __restrict__ As,
+        vector_t<T> const* __restrict__ bs,
+        matrix_t<T> * __restrict__ AtAs,
+        vector_t<T> * __restrict__ Atbs) {
+    int const ch = blockIdx.x;
+    int const tx = threadIdx.x;
+    int const ty = threadIdx.y;
+
+    // shared mem - static alloc
+    __shared__ T shrA[MSIZE][MSIZE];
+    __shared__ T shrb[MSIZE];
+
+    // load into shared mem
+    shrA[ty][tx] = As[ch](ty, tx);
+    if (ty==0)
+        shrb[tx] = bs[ch](tx);
+
+    // make sure things get loaded
+    __syncthreads();
+
+    auto result_mm{static_cast<T>(0)};
+    auto result_mv{static_cast<T>(0)};
+    #pragma unroll
+    for (int i=0; i<MSIZE; i++) {
+        result_mm += shrA[i][ty] * shrA[i][tx];
+        if (ty==0)
+            result_mv += shrA[i][tx] * shrb[i];
+    }
+
+    // store back to global
+    AtAs[ch](ty, tx) = result_mm;
+    if (ty==0)
+        Atbs[ch](tx) = result_mv;
+}
+
+template<typename T>
+__global__
+void kernel_fnnls(
+        matrix_t<T> * __restrict__ AtAs,
+        vector_t<T> * __restrict__ Atbs,
+        vector_t<T> * __restrict__ xs,
+        unsigned int n) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+
+    if (tid >= n) return;
+
+    v2::fnnls(AtAs[tid], Atbs[tid], xs[tid]);
+}
+
+template<typename T>
+std::vector<vector_t<T>> run(
+        std::vector<matrix_t<T>> const& As,
+        std::vector<vector_t<T>> const& bs,
+        int nthreads) {
+    std::cout << "*** testing v2 ***\n";
+    constexpr unsigned int nrows = matrix_t<T>::RowsAtCompileTime;
+
+    // init results
+    std::vector<vector_t<T>> results(As.size());
+    for (auto& v : results)
+        v = vector_t<T>::Zero();
+
+    // create cuda events
+    cudaEvent_t eStart, eFinish;
+    cudaEventCreate(&eStart);
+    cudaEventCreate(&eFinish);
+
+    // allocate device mem
+    matrix_t<T> *d_As, *d_AtAs;
+    vector_t<T> *d_bs, *d_Atbs, *d_xs;
+    unsigned int n = As.size();
+
+    // allocate on device
+    cuda::cuda_malloc(d_As, n);
+    cuda::cuda_malloc(d_AtAs, n);
+    cuda::cuda_malloc(d_bs, n);
+    cuda::cuda_malloc(d_Atbs, n);
+    cuda::cuda_malloc(d_xs, n);
+    cuda::assert_if_error("\tcuda mallocs");
+
+    // copy input
+    cuda::copy_to_dev(d_As, As);
+    cuda::copy_to_dev(d_bs, bs);
+    cuda::assert_if_error("\tcuda memcpy to device");
+
+    {
+        std::cout << "warming up...\n";
+        dim3 nthreadsMult{nrows, nrows};
+        dim3 blocksMult{n};
+        cudaEventRecord(eStart, 0);
+        kernel_mults<T, nrows><<<blocksMult, nthreadsMult>>>(
+            d_As, d_bs, d_AtAs, d_Atbs);
+        cudaEventRecord(eFinish, 0);
+        cudaEventSynchronize(eFinish);
+        float ms;
+        cudaEventElapsedTime(&ms, eStart, eFinish);
+        printf("runtime = %f (ms)\n", ms);
+        cuda::assert_if_error("checking 'kernel_mults' kernel");
+
+        unsigned int threadsFnnls{nthreads};
+        unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
+        cudaEventRecord(eStart, 0);
+        kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
+            d_AtAs, d_Atbs, d_xs, n);
+        cudaEventRecord(eFinish, 0);
+        cudaEventSynchronize(eFinish);
+        cudaEventElapsedTime(&ms, eStart, eFinish);
+        printf("runtime = %f (ms)\n", ms);
+        cuda::assert_if_error("checking 'kernel_fnnls' kernel");
+    }
+
+    {
+        std::cout << "running...\n";
+        for (unsigned int i=0; i<10; i++) {
+            dim3 nthreadsMult{nrows, nrows};
+            dim3 blocksMult{n};
+            cudaEventRecord(eStart, 0);
+            kernel_mults<T, nrows><<<blocksMult, nthreadsMult>>>(
+                d_As, d_bs, d_AtAs, d_Atbs);
+            cudaEventRecord(eFinish, 0);
+            cudaEventSynchronize(eFinish);
+            float ms;
+            cudaEventElapsedTime(&ms, eStart, eFinish);
+            printf("matrix mults runtime = %f (ms)\n", ms);
+            cuda::assert_if_error("checking 'kernel_mults' kernel");
+
+            unsigned int threadsFnnls{nthreads};
+            unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
+            cudaEventRecord(eStart, 0);
+            kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
+                d_AtAs, d_Atbs, d_xs, n);
+            cudaEventRecord(eFinish, 0);
+            cudaEventSynchronize(eFinish);
+            cudaEventElapsedTime(&ms, eStart, eFinish);
+            printf("fnnls runtime = %f (ms)\n", ms);
+            cuda::assert_if_error("checking 'kernel_fnnls' kernel");
+        }
+    }
+    
+    cuda::copy_to_host(results, d_xs);
+    cuda::assert_if_error("\tcuda memcpy back to host");
+
+    cudaEventDestroy(eStart);
+    cudaEventDestroy(eFinish);
+    cudaFree(d_As);
+    cudaFree(d_AtAs);
+    cudaFree(d_bs);
+    cudaFree(d_Atbs);
+    cudaFree(d_xs);
+
+    return results;
+}
+
 }
 
 template<typename T>
@@ -73,14 +237,14 @@ std::vector<vector_t<T>> run_gpu_cpubased(std::vector<matrix_t<T>> const& As,
         int blocks{(n + threads - 1) / threads};
         // warm up
         std::cout << "*** warming up ***\n";
-        kernel_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
+        kernel_inplace_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
             d_result, n);
 
         // measure
         std::cout << "*** running ****\n";
         for (unsigned int i=0; i<10; i++) {
             cudaEventRecord(startE, 0);
-            kernel_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
+            kernel_inplace_fnnls<T><<<blocks, threads>>>(d_As, d_bs, 
                 d_result, n);
             cudaEventRecord(endE, 0);
             cudaEventSynchronize(endE);
@@ -105,28 +269,56 @@ std::vector<vector_t<T>> run_gpu_cpubased(std::vector<matrix_t<T>> const& As,
 
 int main(int argc, char** argv) {
     if (argc<=1) {
-        std::cout << "run with './main <number of channels> <nthreads per block>'\n";
+        std::cout << "run with './main <number of channels> <n'\n";
         exit(0);
     }
+
+    using DataType = float;
+    std::vector<vector_t<DataType>> results_gpu;
+
+    // input number of channels
     unsigned int n = std::atoi(argv[1]);
-    unsigned int nthreads = std::atoi(argv[2]);
-    using type = float;
-    
+
     // create the input matrices
-    std::vector<matrix_t<type>> As(n);
-    std::vector<vector_t<type>> bs(n);
+    std::vector<matrix_t<DataType>> As(n);
+    std::vector<vector_t<DataType>> bs(n);
 
     // randomize
     for (auto& m : As)
-        m = matrix_t<type>::Random();
+        m = matrix_t<DataType>::Random();
     for (auto& v: bs)
-        v = vector_t<type>::Random();
-    
-    // run on cpu 
-    auto results = run_cpu(As, bs);
-    auto results_gpu = run_gpu_cpubased(As, bs, nthreads);
+        v = vector_t<DataType>::Random();
 
-    auto cpu_vs_gpu_valid = validation::validate_eigen_vectors(results, results_gpu);
+    // run cpu version
+    auto results_cpu = run_cpu(As, bs);
+
+    int option = std::atoi(argv[2]);
+    switch (option) {
+    case -1:
+    case 0:
+        std::cout << "run with './main <number of channels> <nthreads per block>'\n";
+        exit(0);
+        break;
+    case 1: 
+    {
+        unsigned int nthreads = std::atoi(argv[3]);
+        results_gpu = run_gpu_cpubased(As, bs, nthreads);
+    }
+        break;
+    case 2:
+    {
+        // use version 2 - matrix mult + fnnls
+        unsigned int nthreads = std::atoi(argv[3]);
+        results_gpu = v2::run(As, bs, nthreads);
+    }
+        break;
+    default:
+        std::cout << "run with './exec <option> <...>'\n";
+        exit(0);
+    }
+    
+    auto cpu_vs_gpu_valid = 
+        validation::validate_eigen_vectors(results_cpu, results_gpu);
     if (cpu_vs_gpu_valid.size()==0)
         std::cout << "+++ cpu vs cpubased impl gpu is valid +++\n";
     else {
@@ -138,11 +330,11 @@ int main(int argc, char** argv) {
         for (auto i : cpu_vs_gpu_valid)
             std::cerr 
                 << "\n************\n"
-                << results[i]
+                << results_cpu[i]
                 << "\n****** vs ******\n"
                 << results_gpu[i] << std::endl
                 << "***** diff *****\n"
-                << results[i] - results_gpu[i]
+                << results_cpu[i] - results_gpu[i]
                 << std::endl;
     }
 
