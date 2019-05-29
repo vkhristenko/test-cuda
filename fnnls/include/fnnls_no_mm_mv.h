@@ -33,7 +33,7 @@ void fnnls(
     auto max_w {static_cast<T>(-1)};
     for (unsigned int i=VECTOR_SIZE-nActive; i<VECTOR_SIZE; i++) {
         auto sum_per_row{static_cast<T>(0)};
-        auto atb = Atb(i);
+        auto const atb = Atb(i);
         #pragma unroll
         for (unsigned int k=0; k<VECTOR_SIZE; k++)
             sum_per_row += AtA(i, k) * x(k);
