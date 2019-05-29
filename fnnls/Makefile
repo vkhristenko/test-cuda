@@ -2,6 +2,7 @@
 
 all: run
 
+HEADERS=fnnls_no_mm_mv.h
 EIGEN_HOME=/data/user/vkhriste/eigen/eigen
 
 run: main.cu
