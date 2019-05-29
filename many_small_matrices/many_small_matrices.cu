@@ -9,7 +9,7 @@
 constexpr int dim = 16;
 
 template<typename T>
-using matrix_t = Eigen::Matrix<T, dim, dim>;
+using matrix_t = Eigen::Matrix<T, dim, dim, Eigen::RowMajor>;
 
 template<typename T>
 __global__
@@ -18,8 +18,40 @@ void kernel_mat_mult_eigen(matrix_t<T> const* A, matrix_t<T> const* B,
     int tid = threadIdx.x + blockDim.x * blockIdx.x;
 
     if (tid < size) {
-        C[tid] = A[tid] * B[tid];
+        C[tid] = A[tid].transpose() * B[tid];
     }
+}
+
+template<typename T, int BLOCK_SIZE>
+__global__
+void kernel_mat_mult_eigen_1(
+        matrix_t<T> const* A, 
+        matrix_t<T> const* B,
+        matrix_t<T>* C,
+        unsigned int size) {
+    int const imat = blockIdx.x;
+    int const ty = threadIdx.y;
+    int const tx = threadIdx.x;
+
+    // shared mem - static allocation
+    __shared__ T As[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ T Bs[BLOCK_SIZE][BLOCK_SIZE];
+    
+    // load into shared mem
+    As[ty][tx] = A[imat](ty, tx);
+    Bs[ty][tx] = B[imat](ty, tx);
+
+    // make sure all elements are loaded
+    __syncthreads();
+
+    auto result {static_cast<T>(0.0)};
+    #pragma unroll
+    for (int i=0; i<BLOCK_SIZE; i++) {
+        result += As[i][ty] * Bs[i][tx];
+    }
+
+    // store to global
+    C[imat](ty, tx) = result;
 }
 
 /*
@@ -51,7 +83,7 @@ void kernel_mat_mult(T const* A, T const* B,
     T result{static_cast<T>(0.0)};
 #pragma unroll
     for (unsigned int i=0; i<BLOCK_SIZE; i++) {
-        result += As[ty][i] * Bs[i][tx];
+        result += As[i][ty] * Bs[i][tx];
     }
 
     // store the result back to the global memory
@@ -68,7 +100,7 @@ std::vector<T> compute_values(std::vector<T> const& A,
             for (int j=0; j<dim; j++) {
                 T tmp = 0;
                 for (int k=0; k<dim; k++) {
-                    tmp += A[mat_offset + i*dim + k] * B[mat_offset + k*dim + j];
+                    tmp += A[mat_offset + k*dim + i] * B[mat_offset + k*dim + j];
                 }
                 result[mat_offset + i*dim + j] = tmp;
             }
@@ -85,7 +117,7 @@ void test_mult(unsigned int n) {
     std::vector<T> h_test(n * dim * dim, 0);
     T *d_A{nullptr}, *d_B{nullptr}, *d_C{nullptr};
     std::vector<matrix_t<T>> h_eA(n), h_eB(n), h_eC(n);
-    matrix_t<T> *d_eA, *d_eB, *d_eC;
+    matrix_t<T> *d_eA, *d_eB, *d_eC, *d_eC_1;
 
     cudaEvent_t startEvent, stopEvent;
 
@@ -111,6 +143,7 @@ void test_mult(unsigned int n) {
     cuda::cuda_malloc(d_eA, n);
     cuda::cuda_malloc(d_eB, n);
     cuda::cuda_malloc(d_eC, n);
+    cuda::cuda_malloc(d_eC_1, n);
     cuda::assert_if_error("checking cuda mallocs");
 
     // copy to device
@@ -121,6 +154,7 @@ void test_mult(unsigned int n) {
     cuda::assert_if_error("checking copying host to device");
 
     {
+        std::cout << "warming up...\n";
         dim3 threads_per_block{dim, dim};
         dim3 blocks{n};
         cudaEventRecord(startEvent, 0);
@@ -131,10 +165,56 @@ void test_mult(unsigned int n) {
         float ms;
         cudaEventElapsedTime(&ms, startEvent, stopEvent);
         printf("my impl kernel runtime (ms) = %f\n", ms);
-        cuda::assert_if_error("checking vsum kernel");
+        cuda::assert_if_error("checking kernel_mat_mult kernel");
     }
     
     {
+        std::cout << "running...\n";
+        dim3 threads_per_block{dim, dim};
+        dim3 blocks{n};
+        cudaEventRecord(startEvent, 0);
+        kernel_mat_mult<T, dim><<<blocks, threads_per_block>>>(
+            d_A, d_B, d_C, n);
+        cudaEventRecord(stopEvent, 0);
+        cudaEventSynchronize(stopEvent);
+        float ms;
+        cudaEventElapsedTime(&ms, startEvent, stopEvent);
+        printf("my impl kernel runtime (ms) = %f\n", ms);
+        cuda::assert_if_error("checking kernel_mat_mult kernel");
+    }
+    
+    {
+        std::cout << "warming up...\n";
+        dim3 threads_per_block{dim, dim};
+        dim3 blocks{n};
+        cudaEventRecord(startEvent, 0);
+        kernel_mat_mult_eigen_1<T, dim><<<blocks, threads_per_block>>>(
+            d_eA, d_eB, d_eC_1, n);
+        cudaEventRecord(stopEvent, 0);
+        cudaEventSynchronize(stopEvent);
+        float ms;
+        cudaEventElapsedTime(&ms, startEvent, stopEvent);
+        printf("my eigen impl kernel runtime (ms) = %f\n", ms);
+        cuda::assert_if_error("checking kernel_mat_mult_eigen_1 kernel");
+    }
+    
+    {
+        std::cout << "running...\n";
+        dim3 threads_per_block{dim, dim};
+        dim3 blocks{n};
+        cudaEventRecord(startEvent, 0);
+        kernel_mat_mult_eigen_1<T, dim><<<blocks, threads_per_block>>>(
+            d_eA, d_eB, d_eC_1, n);
+        cudaEventRecord(stopEvent, 0);
+        cudaEventSynchronize(stopEvent);
+        float ms;
+        cudaEventElapsedTime(&ms, startEvent, stopEvent);
+        printf("my eigen impl kernel runtime (ms) = %f\n", ms);
+        cuda::assert_if_error("checking kernel_mat_mult_eigen_1 kernel");
+    }
+    
+    {
+        std::cout << "warming up...\n";
         dim3 threads_per_block{256};
         dim3 blocks{(n + threads_per_block.x - 1) / threads_per_block.x};
         cudaEventRecord(startEvent, 0);
@@ -145,7 +225,22 @@ void test_mult(unsigned int n) {
         float ms;
         cudaEventElapsedTime(&ms, startEvent, stopEvent);
         printf("eigen impl kernel runtime (ms) = %f\n", ms);
-        cuda::assert_if_error("checking vsum kernel");
+        cuda::assert_if_error("checking kernel_mat_mult_eigen kernel");
+    }
+    
+    {
+        std::cout << "running...\n";
+        dim3 threads_per_block{256};
+        dim3 blocks{(n + threads_per_block.x - 1) / threads_per_block.x};
+        cudaEventRecord(startEvent, 0);
+        kernel_mat_mult_eigen<T><<<blocks, threads_per_block>>>(
+            d_eA, d_eB, d_eC, n);
+        cudaEventRecord(stopEvent, 0);
+        cudaEventSynchronize(stopEvent);
+        float ms;
+        cudaEventElapsedTime(&ms, startEvent, stopEvent);
+        printf("eigen impl kernel runtime (ms) = %f\n", ms);
+        cuda::assert_if_error("checking kernel_mat_mult_eigen kernel");
     }
 
     // copy back
