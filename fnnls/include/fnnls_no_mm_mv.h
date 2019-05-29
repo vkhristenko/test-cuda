@@ -20,30 +20,35 @@ void fnnls(
         const unsigned int const max_iterations = 1000) {
   using data_type = T;
 
-  x = vector_t<T>::Zero();
   auto nPassive = 0;
-  vector_t<data_type> s;
-  vector_t<data_type> w;
-
-// main loop
+  // main loop
   for (auto iter = 0; iter < max_iterations; ++iter) {
     const auto nActive = VECTOR_SIZE - nPassive;
 
     if(!nActive)
       break;
 
-    w.tail(nActive) = Atb.tail(nActive) - (AtA * x).tail(nActive);
+    //  
+    unsigned int w_max_idx = -1;
+    auto max_w {static_cast<T>(-1)};
+    for (unsigned int i=VECTOR_SIZE-nActive; i<VECTOR_SIZE; i++) {
+        auto sum_per_row{static_cast<T>(0)};
+        auto atb = Atb(i);
+        #pragma unroll
+        for (unsigned int k=0; k<VECTOR_SIZE; k++)
+            sum_per_row += AtA(i, k) * x(k);
 
-    // get the index of w that gives the maximum gain
-    Index w_max_idx;
-    const auto max_w = w.tail(nActive).maxCoeff(&w_max_idx);
+        // compute gradient value and check if it is greater than max
+        auto const wvalue = atb - sum_per_row;
+        if (max_w < wvalue) {
+            max_w = wvalue;
+            w_max_idx = i;
+        }
+    }
 
     // check for convergence
     if (max_w < eps)
       break;
-
-    // need to translate the index into the right part of the vector
-    w_max_idx += nPassive;
 
     // swap AtA to avoid copy
     AtA.col(nPassive).swap(AtA.col(w_max_idx));
@@ -55,6 +60,7 @@ void fnnls(
     ++nPassive;
 
 // inner loop
+    vector_t<data_type> s;
     while (nPassive > 0) {
       s.head(nPassive) =
           AtA.topLeftCorner(nPassive, nPassive).llt().solve(Atb.head(nPassive));
@@ -67,7 +73,6 @@ void fnnls(
       auto alpha = std::numeric_limits<double>::max();
       Index alpha_idx = 0;
 
-      #pragma unroll VECTOR_SIZE
       for (auto i = 0; i < nPassive; ++i) {
         if (s[i] <= 0.) {
           auto const ratio = x[i] / (x[i] - s[i]);

@@ -49,7 +49,8 @@ void kernel_mults(
         matrix_t<T> const* __restrict__ As,
         vector_t<T> const* __restrict__ bs,
         matrix_t<T> * __restrict__ AtAs,
-        vector_t<T> * __restrict__ Atbs) {
+        vector_t<T> * __restrict__ Atbs,
+        vector_t<T> * __restrict__ xs) {
     int const ch = blockIdx.x;
     int const tx = threadIdx.x;
     int const ty = threadIdx.y;
@@ -77,8 +78,12 @@ void kernel_mults(
 
     // store back to global
     AtAs[ch](ty, tx) = result_mm;
-    if (ty==0)
+    if (ty==0) {
         Atbs[ch](tx) = result_mv;
+        
+        // initialize the result vector
+        xs[ch](tx) = 0;
+    }
 }
 
 template<typename T>
@@ -137,7 +142,7 @@ std::vector<vector_t<T>> run(
         dim3 blocksMult{n};
         cudaEventRecord(eStart, 0);
         kernel_mults<T, nrows><<<blocksMult, nthreadsMult>>>(
-            d_As, d_bs, d_AtAs, d_Atbs);
+            d_As, d_bs, d_AtAs, d_Atbs, d_xs);
         cudaEventRecord(eFinish, 0);
         cudaEventSynchronize(eFinish);
         float ms;
@@ -164,7 +169,7 @@ std::vector<vector_t<T>> run(
             dim3 blocksMult{n};
             cudaEventRecord(eStart, 0);
             kernel_mults<T, nrows><<<blocksMult, nthreadsMult>>>(
-                d_As, d_bs, d_AtAs, d_Atbs);
+                d_As, d_bs, d_AtAs, d_Atbs, d_xs);
             cudaEventRecord(eFinish, 0);
             cudaEventSynchronize(eFinish);
             float ms;
