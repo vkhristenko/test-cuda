@@ -14,6 +14,83 @@ template<typename T>
 using matrix_t = Eigen::Matrix<T, MATRIX_SIZE, MATRIX_SIZE, Eigen::ColMajor>;
 */
 
+namespace mymath {
+
+template<typename T>
+struct FusedCholeskyForwardSubst {
+    __forceinline__
+    __device__ static void compute(
+            matrix_t<T> const& M, 
+            vector_t<T> const& b,
+            matrix_t<T> &L,
+            vector_t<T> &intermediate,
+            int view) {
+        // compute element 0,0 for L
+        auto const sqrtm_0_0 = std::sqrt(M(0, 0));
+        L(0, 0) = sqrtm_0_0;
+
+        // compute solution for forward subst for element 0
+        auto const interm_0 = b(0) / sqrtm_0_0;
+        intermediate(0) = interm_0;
+
+        for (int i=1; i<view; ++i) {
+            // load the value to sub from
+            T total = b(i);
+
+            // first compute elements to the left of the diagoanl
+            T sumsq{static_cast<T>(0)};
+            for (int j=0; j<i; ++j) {
+                T sumsq2{static_cast<T>(0)};
+                auto const m_i_j = M(i, j);
+                for (int k=0; k<j; ++k)
+                    sumsq2 += L(i, k) * L(j, k);
+
+                // comput the i,j : i>j, elements to the left of the diagonal
+                auto const value_i_j = (m_i_j - sumsq2) / L(j, j);
+                L(i, j) = value_i_j;
+
+                // needed to compute diagonal element
+                sumsq += value_i_j * value_i_j;
+
+                total -= value_i_j * intermediate(j);
+            }
+
+            // second, compute the diagonal element
+            auto const l_i_i = std::sqrt(M(i, i) - sumsq);
+            L(i, i) = l_i_i;
+
+            intermediate(i) = total / l_i_i;
+        }
+    }
+};
+
+//
+// note, we need to use transpose of M
+//
+template<typename T>
+struct BackwardSubst {
+    __forceinline__
+    __device__ static void compute(
+            matrix_t<T> const& M,
+            vector_t<T> const& b,
+            vector_t<T> &x,
+            int view) {
+        // first element
+        x(view - 1) = b(view - 1) / M(view-1, view-1);
+
+        // the rest
+        for (int i=view-2; i>=0; --i) {
+            T total{static_cast<T>(0)};
+            for (int j=i+1; j<view; ++j) 
+                total += M(j, i) * x(j);
+
+            x(i) = (b(i) - total) / M(i, i);
+        }
+    }
+};
+
+}
+
 namespace cpu_based { 
 
 template<typename T>

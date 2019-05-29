@@ -86,6 +86,153 @@ void kernel_mults(
     }
 }
 
+using namespace Eigen;
+
+//
+// default simple version - for any N
+//
+template<typename T>
+struct FusedCholeskyForwardSubst {
+    __forceinline__
+    __device__ static void compute(
+            matrix_t<T> const& M, 
+            vector_t<T> const& b,
+            matrix_t<T> &L,
+            vector_t<T> &intermediate,
+            int view) {
+        // compute element 0,0 for L
+        auto const sqrtm_0_0 = std::sqrt(M(0, 0));
+        L(0, 0) = sqrtm_0_0;
+
+        // compute solution for forward subst for element 0
+        auto const interm_0 = b(0) / sqrtm_0_0;
+        intermediate(0) = interm_0;
+
+        for (int i=1; i<view; ++i) {
+            // load the value to sub from
+            T total = b(i);
+
+            // first compute elements to the left of the diagoanl
+            T sumsq{static_cast<T>(0)};
+            for (int j=0; j<i; ++j) {
+                T sumsq2{static_cast<T>(0)};
+                auto const m_i_j = M(i, j);
+                for (int k=0; k<j; ++k)
+                    sumsq2 += L(i, k) * L(j, k);
+
+                // comput the i,j : i>j, elements to the left of the diagonal
+                auto const value_i_j = (m_i_j - sumsq2) / L(j, j);
+                L(i, j) = value_i_j;
+
+                // needed to compute diagonal element
+                sumsq += value_i_j * value_i_j;
+
+                total -= value_i_j * intermediate(j);
+            }
+
+            // second, compute the diagonal element
+            auto const l_i_i = std::sqrt(M(i, i) - sumsq);
+            L(i, i) = l_i_i;
+
+            intermediate(i) = total / l_i_i;
+        }
+    }
+};
+
+template<typename T, int N>
+struct FusedCholeskySolver;
+
+template<typename T>
+struct FusedCholeskySolver<T, 1> {
+    __forceinline__
+    __device__ static void compute(
+            matrix_t<T> const& M,
+            vector_t<T> const& b,
+            vector_t<T> &x) {
+        auto const x_0 = b(0) / M(0, 0);
+        x(0) = x_0;
+    }
+};
+
+template<typename T>
+struct FusedCholeskySolver<T, 2> {
+    __forceinline__
+    __device__ static void compute(
+            matrix_t<T> const& M,
+            vector_t<T> const& b,
+            vector_t<T> &x) {
+        // element 0
+        auto const l_0_0 = std::sqrt(M(0, 0));
+        auto const interm_0 = b(0) / l_0_0;
+
+        // element 1
+        auto const l_1_0 = M(1, 0) / l_0_0;
+        auto const l_1_1 = std::sqrt(M(1, 1) - l_1_0*l_1_0);
+        auto const interm_1 = (b(1) - interm_0 * l_1_0) / l_1_1;
+        auto const x_1 = interm_1 / l_1_1;
+        x(1) = x_1;
+        auto const x_0 = (interm_0 - l_1_0 * x_1) / l_0_0;
+        x(0) = x_0;
+    }
+};
+
+template<typename T>
+struct FusedCholeskySolver<T, 3> {
+    __forceinline__
+    __device__ static void compute(
+            matrix_t<T> const& M,
+            vector_t<T> const& b,
+            vector_t<T> &x) {
+        // element 0
+        auto const l_0_0 = std::sqrt(M(0, 0));
+        auto const interm_0 = b(0) / l_0_0;
+
+        // row 1
+        auto const l_1_0 = M(1, 0) / l_0_0;
+        auto const l_1_1 = std::sqrt(M(1, 1) - l_1_0*l_1_0);
+        auto const interm_1 = (b(1) - interm_0 * l_1_0) / l_1_1;
+
+        // row 2
+        auto const l_2_0 = M(2, 0) / l_0_0;
+        auto const l_2_1 = (M(2, 1) - l_2_0 * l_1_0) / l_1_1;
+        auto const l_2_2 = std::sqrt(M(2, 2) - l_2_0 * l_2_0 - l_2_1*l_2_1);
+        auto const interm_2 = (b(2) - interm_0 * l_2_0 - interm_1 * l_2_1) / l_2_2;
+
+        auto const x_2 = interm_2 / l_2_2;
+        x(2) = x_2;
+        auto const x_1 = (interm_1 - l_2_1 * x_2) / l_1_1;
+        x(1) = x_1;
+        auto const x_0 = (interm_0 - l_1_0 * x_1 - l_2_0 * x_2) / l_0_0;
+        x(0) = x_0;
+    }
+};
+
+//
+// note, we need to use transpose of M
+// default simple version
+//
+template<typename T>
+struct BackwardSubst {
+    __forceinline__
+    __device__ static void compute(
+            matrix_t<T> const& M,
+            vector_t<T> const& b,
+            vector_t<T> &x,
+            int view) {
+        // first element
+        x(view - 1) = b(view - 1) / M(view-1, view-1);
+
+        // the rest
+        for (int i=view-2; i>=0; --i) {
+            T total{static_cast<T>(0)};
+            for (int j=i+1; j<view; ++j) 
+                total += M(j, i) * x(j);
+
+            x(i) = (b(i) - total) / M(i, i);
+        }
+    }
+};
+
 template<typename T>
 __global__
 void kernel_fnnls(
@@ -144,10 +291,23 @@ void kernel_fnnls(
         ++nPassive;
 
         // inner loop
-        vector_t<data_type> s;
+        vector_t<data_type> s, tmp;
+        matrix_t<data_type> L;
         while (nPassive > 0) {
-          s.head(nPassive) =
-              AtA.topLeftCorner(nPassive, nPassive).llt().solve(Atb.head(nPassive));
+          switch (nPassive) {
+          case 1:
+              FusedCholeskySolver<T, 1>::compute(AtA, Atb, s);
+              break;
+          case 2:
+              FusedCholeskySolver<T, 2>::compute(AtA, Atb, s);
+              break;
+          case 3:
+              FusedCholeskySolver<T, 3>::compute(AtA, Atb, s);
+              break;
+          default:
+              FusedCholeskyForwardSubst<T>::compute(AtA, Atb, L, tmp, nPassive);
+              BackwardSubst<T>::compute(L, tmp, s, nPassive);
+          }
 
           if (s.head(nPassive).minCoeff() > 0.) {
             x.head(nPassive) = s.head(nPassive);
@@ -181,7 +341,6 @@ void kernel_fnnls(
           // swap Atb to match with AtA
           Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(alpha_idx));
           Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(alpha_idx));
-
     }
   }
 }
