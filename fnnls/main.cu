@@ -331,8 +331,36 @@ void swap_rows_cols(
 
 template<typename T>
 __global__
+void kernel_fnnls_mult() {
+    auto const ty = threadIdx.y;
+    auto const tx = threadIdx.x;
+    if (tid >= blockDim.x) return;
+
+    __shared__ T shrAtA[VECTOR_SIZE][VECTOR_SIZE];
+    // load only the necessary rows
+    if (ty>=npassive)
+        shrAtA[ty][tx] = AtA(ty, tx);
+    if (ty==0)
+        shrx[tx] = x(tx);
+    __syncthreads();
+
+    // for now use a single thread per row
+    if (tx==0 && ty>=npassive) {
+        auto const atb = Atb(ty);
+        auto sum{static_cast<T>(0)};
+        #pragma unroll
+        for (unsigned int k=0; k<VECTOR_SIZE; k++)
+            sum += shrAtA(ty, k) * shrx(k);
+
+        auto const wvalue = atb - sum;
+    }
+}
+
+template<typename T>
+__global__
 void kernel_fnnls(
         matrix_t<T> * __restrict__ AtAs,
+        matrix_t<T> * __restrict__ Ls,
         vector_t<T> * __restrict__ Atbs,
         vector_t<T> * __restrict__ xs,
         unsigned int n) {
@@ -343,6 +371,7 @@ void kernel_fnnls(
     constexpr double eps = 1e-11;
     constexpr unsigned int max_iterations = 1000;
     my_matrix_t<T> AtA{AtAs[tid].data()};
+    my_matrix_t<T> L{Ls[tid].data()};
     my_vector_t<T> Atb{Atbs[tid].data()};
     my_vector_t<T> x{xs[tid].data()};
 //    auto& AtA = AtAs[tid];
@@ -396,9 +425,7 @@ void kernel_fnnls(
 //        vector_t<data_type> s, tmp;
 //        matrix_t<data_type> L;
         data_type __s[matrix_t<T>::RowsAtCompileTime], __tmp[matrix_t<T>::RowsAtCompileTime];
-        data_type __L[matrix_t<T>::RowsAtCompileTime * matrix_t<T>::RowsAtCompileTime];
         my_vector_t<data_type> s{__s}, tmp{__tmp};
-        my_matrix_t<data_type> L{__L};
         while (nPassive > 0) {
           switch (nPassive) {
           case 1:
@@ -509,13 +536,14 @@ std::vector<vector_t<T>> run(
     cudaEventCreate(&eFinish);
 
     // allocate device mem
-    matrix_t<T> *d_As, *d_AtAs;
+    matrix_t<T> *d_As, *d_AtAs, *d_L;
     vector_t<T> *d_bs, *d_Atbs, *d_xs;
     unsigned int n = As.size();
 
     // allocate on device
     cuda::cuda_malloc(d_As, n);
     cuda::cuda_malloc(d_AtAs, n);
+    cuda::cuda_malloc(d_L, n);
     cuda::cuda_malloc(d_bs, n);
     cuda::cuda_malloc(d_Atbs, n);
     cuda::cuda_malloc(d_xs, n);
@@ -544,7 +572,7 @@ std::vector<vector_t<T>> run(
         unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
         cudaEventRecord(eStart, 0);
         kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
-            d_AtAs, d_Atbs, d_xs, n);
+            d_AtAs, d_L, d_Atbs, d_xs, n);
         cudaEventRecord(eFinish, 0);
         cudaEventSynchronize(eFinish);
         cudaEventElapsedTime(&ms, eStart, eFinish);
@@ -571,7 +599,7 @@ std::vector<vector_t<T>> run(
             unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
             cudaEventRecord(eStart, 0);
             kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
-                d_AtAs, d_Atbs, d_xs, n);
+                d_AtAs, d_L, d_Atbs, d_xs, n);
             cudaEventRecord(eFinish, 0);
             cudaEventSynchronize(eFinish);
             cudaEventElapsedTime(&ms, eStart, eFinish);
@@ -587,6 +615,7 @@ std::vector<vector_t<T>> run(
     cudaEventDestroy(eFinish);
     cudaFree(d_As);
     cudaFree(d_AtAs);
+    cudaFree(d_L);
     cudaFree(d_bs);
     cudaFree(d_Atbs);
     cudaFree(d_xs);
