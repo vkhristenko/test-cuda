@@ -95,10 +95,10 @@ template<typename T>
 struct FusedCholeskyForwardSubst {
     __forceinline__
     __device__ static void compute(
-            matrix_t<T> const& M, 
-            vector_t<T> const& b,
-            matrix_t<T> &L,
-            vector_t<T> &intermediate,
+            my_matrix_t<T> const& M, 
+            my_vector_t<T> const& b,
+            my_matrix_t<T> &L,
+            my_vector_t<T> &intermediate,
             int view) {
         // compute element 0,0 for L
         auto const sqrtm_0_0 = std::sqrt(M(0, 0));
@@ -143,10 +143,10 @@ template<typename T, int N>
 struct FusedCholeskyForwardSubstUnrolled {
     __forceinline__
     __device__ static void compute(
-            matrix_t<T> const& M, 
-            vector_t<T> const& b,
-            matrix_t<T> &L,
-            vector_t<T> &intermediate) {
+            my_matrix_t<T> const& M, 
+            my_vector_t<T> const& b,
+            my_matrix_t<T> &L,
+            my_vector_t<T> &intermediate) {
         // compute element 0,0 for L
         auto const sqrtm_0_0 = std::sqrt(M(0, 0));
         L(0, 0) = sqrtm_0_0;
@@ -194,9 +194,9 @@ template<typename T>
 struct FusedCholeskySolver<T, 1> {
     __forceinline__
     __device__ static void compute(
-            matrix_t<T> const& M,
-            vector_t<T> const& b,
-            vector_t<T> &x) {
+            my_matrix_t<T> const& M,
+            my_vector_t<T> const& b,
+            my_vector_t<T> &x) {
         auto const x_0 = b(0) / M(0, 0);
         x(0) = x_0;
     }
@@ -206,9 +206,9 @@ template<typename T>
 struct FusedCholeskySolver<T, 2> {
     __forceinline__
     __device__ static void compute(
-            matrix_t<T> const& M,
-            vector_t<T> const& b,
-            vector_t<T> &x) {
+            my_matrix_t<T> const& M,
+            my_vector_t<T> const& b,
+            my_vector_t<T> &x) {
         // element 0
         auto const l_0_0 = std::sqrt(M(0, 0));
         auto const interm_0 = b(0) / l_0_0;
@@ -228,9 +228,9 @@ template<typename T>
 struct FusedCholeskySolver<T, 3> {
     __forceinline__
     __device__ static void compute(
-            matrix_t<T> const& M,
-            vector_t<T> const& b,
-            vector_t<T> &x) {
+            my_matrix_t<T> const& M,
+            my_vector_t<T> const& b,
+            my_vector_t<T> &x) {
         // element 0
         auto const l_0_0 = std::sqrt(M(0, 0));
         auto const interm_0 = b(0) / l_0_0;
@@ -263,9 +263,9 @@ template<typename T>
 struct BackwardSubst {
     __forceinline__
     __device__ static void compute(
-            matrix_t<T> const& M,
-            vector_t<T> const& b,
-            vector_t<T> &x,
+            my_matrix_t<T> const& M,
+            my_vector_t<T> const& b,
+            my_vector_t<T> &x,
             int view) {
         // first element
         x(view - 1) = b(view - 1) / M(view-1, view-1);
@@ -285,9 +285,9 @@ template<typename T, int N>
 struct BackwardSubstUnrolled {
     __forceinline__
     __device__ static void compute(
-            matrix_t<T> const& M,
-            vector_t<T> const& b,
-            vector_t<T> &x) {
+            my_matrix_t<T> const& M,
+            my_vector_t<T> const& b,
+            my_vector_t<T> &x) {
         // first element
         x(N - 1) = b(N - 1) / M(N-1, N-1);
 
@@ -308,7 +308,7 @@ template<typename T>
 __forceinline__
 __device__
 void swap_rows_cols(
-        matrix_t<T> &M,
+        my_matrix_t<T> &M,
         int i,
         int j) {
     // diagonal 
@@ -342,9 +342,12 @@ void kernel_fnnls(
 
     constexpr double eps = 1e-11;
     constexpr unsigned int max_iterations = 1000;
-    auto& AtA = AtAs[tid];
-    auto& Atb = Atbs[tid];
-    auto& x = xs[tid];
+    my_matrix_t<T> AtA{AtAs[tid].data()};
+    my_vector_t<T> Atb{Atbs[tid].data()};
+    my_vector_t<T> x{xs[tid].data()};
+//    auto& AtA = AtAs[tid];
+//    auto& Atb = Atbs[tid];
+//    auto& x = xs[tid];
     using data_type = T;
 
     auto nPassive = 0;
@@ -382,14 +385,20 @@ void kernel_fnnls(
 //        AtA.col(nPassive).swap(AtA.col(w_max_idx));
 //        AtA.row(nPassive).swap(AtA.row(w_max_idx));
         // swap Atb to match with AtA
-        Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(w_max_idx));
-        Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(w_max_idx));
+//        Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(w_max_idx));
+//        Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(w_max_idx));
+        Eigen::numext::swap(Atb(nPassive), Atb(w_max_idx));
+        Eigen::numext::swap(x(nPassive), x(w_max_idx));
 
         ++nPassive;
 
         // inner loop
-        vector_t<data_type> s, tmp;
-        matrix_t<data_type> L;
+//        vector_t<data_type> s, tmp;
+//        matrix_t<data_type> L;
+        data_type __s[matrix_t<T>::RowsAtCompileTime], __tmp[matrix_t<T>::RowsAtCompileTime];
+        data_type __L[matrix_t<T>::RowsAtCompileTime * matrix_t<T>::RowsAtCompileTime];
+        my_vector_t<data_type> s{__s}, tmp{__tmp};
+        my_matrix_t<data_type> L{__L};
         while (nPassive > 0) {
           switch (nPassive) {
           case 1:
@@ -446,8 +455,8 @@ void kernel_fnnls(
           Index alpha_idx = 0;
 
           for (auto i = 0; i < nPassive; ++i) {
-            if (s[i] <= 0.) {
-              auto const ratio = x[i] / (x[i] - s[i]);
+            if (s(i) <= 0.) {
+              auto const ratio = x(i) / (x(i) - s(i));
               if (ratio < alpha) {
                 alpha = ratio;
                 alpha_idx = i;
@@ -466,15 +475,17 @@ void kernel_fnnls(
           for (int ii=0; ii<nPassive; ++ii)
               x(ii) += alpha * (s(ii) - x(ii));
 //          x.head(nPassive) += alpha * (s.head(nPassive) - x.head(nPassive));
-          x[alpha_idx] = 0;
+          x(alpha_idx) = 0;
           --nPassive;
 
           swap_rows_cols(AtA, alpha_idx, nPassive);
 //          AtA.col(nPassive).swap(AtA.col(alpha_idx));
 //          AtA.row(nPassive).swap(AtA.row(alpha_idx));
           // swap Atb to match with AtA
-          Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(alpha_idx));
-          Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(alpha_idx));
+//          Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(alpha_idx));
+//          Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(alpha_idx));
+          Eigen::numext::swap(Atb(nPassive), Atb(alpha_idx));
+          Eigen::numext::swap(x(nPassive), x(alpha_idx));
     }
   }
 }
