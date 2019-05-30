@@ -1,3 +1,4 @@
 *.o
 *.bin
 *.prof
+*.nsight-cuprof-report
