@@ -303,6 +303,32 @@ struct BackwardSubstUnrolled {
     }
 };
 
+// j > i
+template<typename T>
+__forceinline__
+__device__
+void swap_rows_cols(
+        matrix_t<T> &M,
+        int i,
+        int j) {
+    // diagonal 
+    auto const diag = M(i, i);
+    M(i, i) = M(j, j);
+    M(j, j) = diag;
+
+    #pragma unroll
+    for (int k=0; k<matrix_t<T>::RowsAtCompileTime; ++k) {
+        if (k==i || k==j)
+            continue;
+
+        auto const tmp = M(i, k);
+        M(i, k) = M(j, k);
+        M(j, k) = tmp;
+        M(k, i) = M(k, j);
+        M(k, j) = tmp;
+    }
+}
+
 template<typename T>
 __global__
 void kernel_fnnls(
@@ -352,8 +378,9 @@ void kernel_fnnls(
           break;
 
         // swap AtA to avoid copy
-        AtA.col(nPassive).swap(AtA.col(w_max_idx));
-        AtA.row(nPassive).swap(AtA.row(w_max_idx));
+        swap_rows_cols(AtA, nPassive, w_max_idx);
+//        AtA.col(nPassive).swap(AtA.col(w_max_idx));
+//        AtA.row(nPassive).swap(AtA.row(w_max_idx));
         // swap Atb to match with AtA
         Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(w_max_idx));
         Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(w_max_idx));
@@ -399,10 +426,21 @@ void kernel_fnnls(
               BackwardSubst<T>::compute(L, tmp, s, nPassive);
           }
 
+          bool hasNegative = false;
+          for (int ii=0; ii<nPassive; ++ii) {
+              hasNegative |= s(ii) <= 0;
+          }
+          if (!hasNegative) {
+              for (int i=0; i<nPassive; ++i)
+                  x(i) = s(i);
+              break;
+          }
+
+          /*
           if (s.head(nPassive).minCoeff() > 0.) {
             x.head(nPassive) = s.head(nPassive);
             break;
-          }
+          }*/
 
           auto alpha = std::numeric_limits<double>::max();
           Index alpha_idx = 0;
@@ -418,16 +456,22 @@ void kernel_fnnls(
           }
 
           if (std::numeric_limits<double>::max() == alpha) {
-            x.head(nPassive) = s.head(nPassive);
+            for (int i=0; i<nPassive; ++i) {
+                x(i) = s(i);
+            }
+//            x.head(nPassive) = s.head(nPassive);
             break;
           }
 
-          x.head(nPassive) += alpha * (s.head(nPassive) - x.head(nPassive));
+          for (int ii=0; ii<nPassive; ++ii)
+              x(ii) += alpha * (s(ii) - x(ii));
+//          x.head(nPassive) += alpha * (s.head(nPassive) - x.head(nPassive));
           x[alpha_idx] = 0;
           --nPassive;
 
-          AtA.col(nPassive).swap(AtA.col(alpha_idx));
-          AtA.row(nPassive).swap(AtA.row(alpha_idx));
+          swap_rows_cols(AtA, alpha_idx, nPassive);
+//          AtA.col(nPassive).swap(AtA.col(alpha_idx));
+//          AtA.row(nPassive).swap(AtA.row(alpha_idx));
           // swap Atb to match with AtA
           Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(alpha_idx));
           Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(alpha_idx));
