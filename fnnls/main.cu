@@ -329,6 +329,7 @@ void swap_rows_cols(
     }
 }
 
+/*
 template<typename T>
 __global__
 void kernel_fnnls_mult() {
@@ -355,6 +356,7 @@ void kernel_fnnls_mult() {
         auto const wvalue = atb - sum;
     }
 }
+*/
 
 template<typename T>
 __global__
