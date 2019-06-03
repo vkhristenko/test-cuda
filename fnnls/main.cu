@@ -50,7 +50,8 @@ void kernel_mults(
         vector_t<T> const* __restrict__ bs,
         matrix_t<T> * __restrict__ AtAs,
         vector_t<T> * __restrict__ Atbs,
-        vector_t<T> * __restrict__ xs) {
+        vector_t<T> * __restrict__ xs,
+        char * __restrict__ mapping) {
     int const ch = blockIdx.x;
     int const tx = threadIdx.x;
     int const ty = threadIdx.y;
@@ -83,6 +84,8 @@ void kernel_mults(
         
         // initialize the result vector
         xs[ch](tx) = 0;
+        // init the mapping
+        mapping[ch*MSIZE + tx] = tx;
     }
 }
 
@@ -99,24 +102,28 @@ struct FusedCholeskyForwardSubst {
             my_vector_t<T> const& b,
             my_matrix_t<T> &L,
             my_vector_t<T> &intermediate,
+            char const* mapping,
             int view) {
         // compute element 0,0 for L
-        auto const sqrtm_0_0 = std::sqrt(M(0, 0));
+        auto const real_0 = mapping[0];
+        auto const sqrtm_0_0 = std::sqrt(M(real_0, real_0));
         L(0, 0) = sqrtm_0_0;
 
         // compute solution for forward subst for element 0
-        auto const interm_0 = b(0) / sqrtm_0_0;
+        auto const interm_0 = b(real_0) / sqrtm_0_0;
         intermediate(0) = interm_0;
 
         for (int i=1; i<view; ++i) {
             // load the value to sub from
-            T total = b(i);
+            auto const real_i = mapping[i];
+            T total = b(real_i);
 
             // first compute elements to the left of the diagoanl
             T sumsq{static_cast<T>(0)};
             for (int j=0; j<i; ++j) {
                 T sumsq2{static_cast<T>(0)};
-                auto const m_i_j = M(i, j);
+                auto const real_j = mapping[j];
+                auto const m_i_j = M(real_i, real_j);
                 for (int k=0; k<j; ++k)
                     sumsq2 += L(i, k) * L(j, k);
 
@@ -131,7 +138,7 @@ struct FusedCholeskyForwardSubst {
             }
 
             // second, compute the diagonal element
-            auto const l_i_i = std::sqrt(M(i, i) - sumsq);
+            auto const l_i_i = std::sqrt(M(real_i, real_i) - sumsq);
             L(i, i) = l_i_i;
 
             intermediate(i) = total / l_i_i;
@@ -146,25 +153,29 @@ struct FusedCholeskyForwardSubstUnrolled {
             my_matrix_t<T> const& M, 
             my_vector_t<T> const& b,
             my_matrix_t<T> &L,
-            my_vector_t<T> &intermediate) {
+            my_vector_t<T> &intermediate,
+            char const* mapping) {
         // compute element 0,0 for L
-        auto const sqrtm_0_0 = std::sqrt(M(0, 0));
+        auto const real_0 = mapping[0];
+        auto const sqrtm_0_0 = std::sqrt(M(real_0, real_0));
         L(0, 0) = sqrtm_0_0;
 
         // compute solution for forward subst for element 0
-        auto const interm_0 = b(0) / sqrtm_0_0;
+        auto const interm_0 = b(real_0) / sqrtm_0_0;
         intermediate(0) = interm_0;
 
         #pragma unroll
         for (int i=1; i<N; ++i) {
             // load the value to sub from
-            T total = b(i);
+            auto const real_i = mapping[i];
+            T total = b(real_i);
 
             // first compute elements to the left of the diagoanl
             T sumsq{static_cast<T>(0)};
             for (int j=0; j<i; ++j) {
                 T sumsq2{static_cast<T>(0)};
-                auto const m_i_j = M(i, j);
+                auto const real_j = mapping[j];
+                auto const m_i_j = M(real_i, real_j);
                 for (int k=0; k<j; ++k)
                     sumsq2 += L(i, k) * L(j, k);
 
@@ -179,7 +190,7 @@ struct FusedCholeskyForwardSubstUnrolled {
             }
 
             // second, compute the diagonal element
-            auto const l_i_i = std::sqrt(M(i, i) - sumsq);
+            auto const l_i_i = std::sqrt(M(real_i, real_i) - sumsq);
             L(i, i) = l_i_i;
 
             intermediate(i) = total / l_i_i;
@@ -196,8 +207,10 @@ struct FusedCholeskySolver<T, 1> {
     __device__ static void compute(
             my_matrix_t<T> const& M,
             my_vector_t<T> const& b,
-            my_vector_t<T> &x) {
-        auto const x_0 = b(0) / M(0, 0);
+            my_vector_t<T> &x,
+            char const* mapping) {
+        auto const real_0 = mapping[0];
+        auto const x_0 = b(real_0) / M(real_0, real_0);
         x(0) = x_0;
     }
 };
@@ -208,15 +221,18 @@ struct FusedCholeskySolver<T, 2> {
     __device__ static void compute(
             my_matrix_t<T> const& M,
             my_vector_t<T> const& b,
-            my_vector_t<T> &x) {
+            my_vector_t<T> &x,
+            char const* mapping) {
         // element 0
-        auto const l_0_0 = std::sqrt(M(0, 0));
-        auto const interm_0 = b(0) / l_0_0;
+        auto const real_0 = mapping[0];
+        auto const real_1 = mapping[1];
+        auto const l_0_0 = std::sqrt(M(real_0, real_0));
+        auto const interm_0 = b(real_0) / l_0_0;
 
         // element 1
-        auto const l_1_0 = M(1, 0) / l_0_0;
-        auto const l_1_1 = std::sqrt(M(1, 1) - l_1_0*l_1_0);
-        auto const interm_1 = (b(1) - interm_0 * l_1_0) / l_1_1;
+        auto const l_1_0 = M(real_1, real_0) / l_0_0;
+        auto const l_1_1 = std::sqrt(M(real_1, real_1) - l_1_0*l_1_0);
+        auto const interm_1 = (b(real_1) - interm_0 * l_1_0) / l_1_1;
         auto const x_1 = interm_1 / l_1_1;
         x(1) = x_1;
         auto const x_0 = (interm_0 - l_1_0 * x_1) / l_0_0;
@@ -230,21 +246,25 @@ struct FusedCholeskySolver<T, 3> {
     __device__ static void compute(
             my_matrix_t<T> const& M,
             my_vector_t<T> const& b,
-            my_vector_t<T> &x) {
+            my_vector_t<T> &x,
+            char const* mapping) {
         // element 0
-        auto const l_0_0 = std::sqrt(M(0, 0));
-        auto const interm_0 = b(0) / l_0_0;
+        auto const real_0 = mapping[0];
+        auto const l_0_0 = std::sqrt(M(real_0, real_0));
+        auto const interm_0 = b(real_0) / l_0_0;
 
         // row 1
-        auto const l_1_0 = M(1, 0) / l_0_0;
-        auto const l_1_1 = std::sqrt(M(1, 1) - l_1_0*l_1_0);
-        auto const interm_1 = (b(1) - interm_0 * l_1_0) / l_1_1;
+        auto const real_1 = mapping[1];
+        auto const l_1_0 = M(real_1, real_0) / l_0_0;
+        auto const l_1_1 = std::sqrt(M(real_1, real_1) - l_1_0*l_1_0);
+        auto const interm_1 = (b(real_1) - interm_0 * l_1_0) / l_1_1;
 
         // row 2
-        auto const l_2_0 = M(2, 0) / l_0_0;
-        auto const l_2_1 = (M(2, 1) - l_2_0 * l_1_0) / l_1_1;
-        auto const l_2_2 = std::sqrt(M(2, 2) - l_2_0 * l_2_0 - l_2_1*l_2_1);
-        auto const interm_2 = (b(2) - interm_0 * l_2_0 - interm_1 * l_2_1) / l_2_2;
+        auto const real_2 = mapping[2];
+        auto const l_2_0 = M(real_2, real_0) / l_0_0;
+        auto const l_2_1 = (M(real_2, real_1) - l_2_0 * l_1_0) / l_1_1;
+        auto const l_2_2 = std::sqrt(M(real_2, real_2) - l_2_0 * l_2_0 - l_2_1*l_2_1);
+        auto const interm_2 = (b(real_2) - interm_0 * l_2_0 - interm_1 * l_2_1) / l_2_2;
 
         auto const x_2 = interm_2 / l_2_2;
         x(2) = x_2;
@@ -257,7 +277,8 @@ struct FusedCholeskySolver<T, 3> {
 
 //
 // note, we need to use transpose of M
-// default simple version
+//  default simple version
+// note, we do not need to do mapping of indices for backward substitution
 //
 template<typename T>
 struct BackwardSubst {
@@ -365,8 +386,10 @@ void kernel_fnnls(
         matrix_t<T> * __restrict__ Ls,
         vector_t<T> * __restrict__ Atbs,
         vector_t<T> * __restrict__ xs,
+        char * __restrict__ mapping,
         unsigned int n) {
     int const tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int const offset = tid * VECTOR_SIZE;
 
     if (tid >= n) return;
 
@@ -376,9 +399,6 @@ void kernel_fnnls(
     my_matrix_t<T> L{Ls[tid].data()};
     my_vector_t<T> Atb{Atbs[tid].data()};
     my_vector_t<T> x{xs[tid].data()};
-//    auto& AtA = AtAs[tid];
-//    auto& Atb = Atbs[tid];
-//    auto& x = xs[tid];
     using data_type = T;
 
     auto nPassive = 0;
@@ -394,10 +414,14 @@ void kernel_fnnls(
         auto max_w {static_cast<T>(-1)};
         for (unsigned int i=VECTOR_SIZE-nActive; i<VECTOR_SIZE; i++) {
             auto sum_per_row{static_cast<T>(0)};
-            auto const atb = Atb(i);
+            auto const real_i = mapping[offset + i];
+            auto const atb = Atb(real_i);
             #pragma unroll
             for (unsigned int k=0; k<VECTOR_SIZE; k++)
-                sum_per_row += AtA(i, k) * x(k);
+                // note, we do not need to look up k in the mapping
+                // both AtA and x have swaps applied -> therefore dot product will 
+                // not change per row
+                sum_per_row += AtA(real_i, k) * x(k);
 
             // compute gradient value and check if it is greater than max
             auto const wvalue = atb - sum_per_row;
@@ -411,16 +435,18 @@ void kernel_fnnls(
         if (max_w < eps)
           break;
 
+        Eigen::numext::swap(
+                mapping[offset + nPassive], 
+                mapping[offset + w_max_idx]);
         // swap AtA to avoid copy
-        swap_rows_cols(AtA, nPassive, w_max_idx);
+//        swap_rows_cols(AtA, nPassive, w_max_idx);
 //        AtA.col(nPassive).swap(AtA.col(w_max_idx));
 //        AtA.row(nPassive).swap(AtA.row(w_max_idx));
         // swap Atb to match with AtA
 //        Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(w_max_idx));
 //        Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(w_max_idx));
-        Eigen::numext::swap(Atb(nPassive), Atb(w_max_idx));
-        Eigen::numext::swap(x(nPassive), x(w_max_idx));
-
+//        Eigen::numext::swap(Atb(nPassive), Atb(w_max_idx));
+//        Eigen::numext::swap(x(nPassive), x(w_max_idx));
         ++nPassive;
 
         // inner loop
@@ -429,38 +455,45 @@ void kernel_fnnls(
         data_type __s[matrix_t<T>::RowsAtCompileTime], __tmp[matrix_t<T>::RowsAtCompileTime];
         my_vector_t<data_type> s{__s}, tmp{__tmp};
         while (nPassive > 0) {
+          char const* current_mapping = mapping + offset;
           switch (nPassive) {
           case 1:
-              FusedCholeskySolver<T, 1>::compute(AtA, Atb, s);
+              FusedCholeskySolver<T, 1>::compute(AtA, Atb, s, current_mapping);
               break;
           case 2:
-              FusedCholeskySolver<T, 2>::compute(AtA, Atb, s);
+              FusedCholeskySolver<T, 2>::compute(AtA, Atb, s, current_mapping);
               break;
           case 3:
-              FusedCholeskySolver<T, 3>::compute(AtA, Atb, s);
+              FusedCholeskySolver<T, 3>::compute(AtA, Atb, s, current_mapping);
               break;
           case 4:
-              FusedCholeskyForwardSubstUnrolled<T, 4>::compute(AtA, Atb, L, tmp);
+              FusedCholeskyForwardSubstUnrolled<T, 4>::compute(AtA, Atb, L, tmp, 
+                current_mapping);
               BackwardSubstUnrolled<T, 4>::compute(L, tmp, s);
               break;
           case 5:
-              FusedCholeskyForwardSubstUnrolled<T, 5>::compute(AtA, Atb, L, tmp);
+              FusedCholeskyForwardSubstUnrolled<T, 5>::compute(AtA, Atb, L, tmp,
+                current_mapping);
               BackwardSubstUnrolled<T, 5>::compute(L, tmp, s);
               break;
           case 6:
-              FusedCholeskyForwardSubstUnrolled<T, 6>::compute(AtA, Atb, L, tmp);
+              FusedCholeskyForwardSubstUnrolled<T, 6>::compute(AtA, Atb, L, tmp,
+                current_mapping);
               BackwardSubstUnrolled<T, 6>::compute(L, tmp, s);
               break;
           case 7:
-              FusedCholeskyForwardSubstUnrolled<T, 7>::compute(AtA, Atb, L, tmp);
+              FusedCholeskyForwardSubstUnrolled<T, 7>::compute(AtA, Atb, L, tmp,
+                current_mapping);
               BackwardSubstUnrolled<T, 7>::compute(L, tmp, s);
               break;
           case 8:
-              FusedCholeskyForwardSubstUnrolled<T, 8>::compute(AtA, Atb, L, tmp);
+              FusedCholeskyForwardSubstUnrolled<T, 8>::compute(AtA, Atb, L, tmp,
+                current_mapping);
               BackwardSubstUnrolled<T, 8>::compute(L, tmp, s);
               break;
           default:
-              FusedCholeskyForwardSubst<T>::compute(AtA, Atb, L, tmp, nPassive);
+              FusedCholeskyForwardSubst<T>::compute(AtA, Atb, L, tmp,
+                current_mapping, nPassive);
               BackwardSubst<T>::compute(L, tmp, s, nPassive);
           }
 
@@ -469,54 +502,86 @@ void kernel_fnnls(
               hasNegative |= s(ii) <= 0;
           }
           if (!hasNegative) {
-              for (int i=0; i<nPassive; ++i)
-                  x(i) = s(i);
+              for (int i=0; i<nPassive; ++i) {
+                  // note, s contains passive/active set layout
+                  // and x contains unpermuted final values in their repective pos
+                  auto const real_i = mapping[offset + i];
+                  x(real_i) = s(i);
+              }
               break;
           }
 
-          /*
-          if (s.head(nPassive).minCoeff() > 0.) {
-            x.head(nPassive) = s.head(nPassive);
-            break;
-          }*/
-
-          auto alpha = std::numeric_limits<double>::max();
-          Index alpha_idx = 0;
+          auto alpha = std::numeric_limits<T>::max();
+          char alpha_idx=0, real_alpha_idx=0;
 
           for (auto i = 0; i < nPassive; ++i) {
             if (s(i) <= 0.) {
-              auto const ratio = x(i) / (x(i) - s(i));
+              auto const real_i = mapping[offset + i];
+              auto const x_i = x(real_i);
+              auto const ratio = x_i / (x_i - s(i));
               if (ratio < alpha) {
                 alpha = ratio;
                 alpha_idx = i;
+                real_alpha_idx = real_i;
               }
             }
           }
 
-          if (std::numeric_limits<double>::max() == alpha) {
+          if (std::numeric_limits<T>::max() == alpha) {
             for (int i=0; i<nPassive; ++i) {
-                x(i) = s(i);
+                auto const real_i = mapping[offset + i];
+                x(real_i) = s(i);
             }
-//            x.head(nPassive) = s.head(nPassive);
             break;
           }
 
-          for (int ii=0; ii<nPassive; ++ii)
-              x(ii) += alpha * (s(ii) - x(ii));
-//          x.head(nPassive) += alpha * (s.head(nPassive) - x.head(nPassive));
-          x(alpha_idx) = 0;
+          for (int ii=0; ii<nPassive; ++ii) {
+            auto const real_i = mapping[offset+ii];
+            auto const x_ii = x(real_i);
+            x(real_i) += alpha * (s(ii) - x_ii);
+          }
+          x(real_alpha_idx) = 0;
           --nPassive;
 
-          swap_rows_cols(AtA, alpha_idx, nPassive);
+          Eigen::numext::swap(
+                mapping[offset + nPassive], 
+                mapping[offset + alpha_idx]);
+//          swap_rows_cols(AtA, alpha_idx, nPassive);
 //          AtA.col(nPassive).swap(AtA.col(alpha_idx));
 //          AtA.row(nPassive).swap(AtA.row(alpha_idx));
           // swap Atb to match with AtA
 //          Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(alpha_idx));
 //          Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(alpha_idx));
-          Eigen::numext::swap(Atb(nPassive), Atb(alpha_idx));
-          Eigen::numext::swap(x(nPassive), x(alpha_idx));
+//          Eigen::numext::swap(Atb(nPassive), Atb(alpha_idx));
+//          Eigen::numext::swap(x(nPassive), x(alpha_idx));
     }
   }
+}
+
+template<typename T, int NCHANNELS>
+__global__
+void kernel_permute(
+        vector_t<T> *xs,
+        char const* mapping,
+        int const n) {
+    // indices 
+    int const gtid = threadIdx.x + blockDim.x*blockIdx.x;
+    int const gch = gtid / 10;
+    int const ltid = threadIdx.x % 10;
+    int const lch = threadIdx.x / 10;
+
+    if (gch >= n) return;
+
+    // configure shared mem
+    __shared__ T values[NCHANNELS * 10];
+
+    // copy to local
+    values[lch*10 + ltid] = xs[gch](ltid);
+    char const sample = mapping[gtid];
+    __syncthreads();
+
+    // write back to global
+    xs[gch](ltid) = values[lch*10 + sample];
 }
 
 template<typename T>
@@ -540,6 +605,7 @@ std::vector<vector_t<T>> run(
     // allocate device mem
     matrix_t<T> *d_As, *d_AtAs, *d_L;
     vector_t<T> *d_bs, *d_Atbs, *d_xs;
+    char *d_mapping;
     unsigned int n = As.size();
 
     // allocate on device
@@ -549,6 +615,7 @@ std::vector<vector_t<T>> run(
     cuda::cuda_malloc(d_bs, n);
     cuda::cuda_malloc(d_Atbs, n);
     cuda::cuda_malloc(d_xs, n);
+    cuda::cuda_malloc(d_mapping, n * matrix_t<T>::RowsAtCompileTime);
     cuda::assert_if_error("\tcuda mallocs");
 
     // copy input
@@ -562,7 +629,7 @@ std::vector<vector_t<T>> run(
         dim3 blocksMult{n};
         cudaEventRecord(eStart, 0);
         kernel_mults<T, nrows><<<blocksMult, nthreadsMult>>>(
-            d_As, d_bs, d_AtAs, d_Atbs, d_xs);
+            d_As, d_bs, d_AtAs, d_Atbs, d_xs, d_mapping);
         cudaEventRecord(eFinish, 0);
         cudaEventSynchronize(eFinish);
         float ms;
@@ -574,12 +641,14 @@ std::vector<vector_t<T>> run(
         unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
         cudaEventRecord(eStart, 0);
         kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
-            d_AtAs, d_L, d_Atbs, d_xs, n);
+            d_AtAs, d_L, d_Atbs, d_xs, d_mapping, n);
         cudaEventRecord(eFinish, 0);
         cudaEventSynchronize(eFinish);
         cudaEventElapsedTime(&ms, eStart, eFinish);
         printf("runtime = %f (ms)\n", ms);
         cuda::assert_if_error("checking 'kernel_fnnls' kernel");
+        kernel_permute<T, 32><<<(n*10+320-1)/320, 320>>>(d_xs, d_mapping, n);
+        cuda::assert_if_error("chacking permutation");
     }
 
     {
@@ -589,7 +658,7 @@ std::vector<vector_t<T>> run(
             dim3 blocksMult{n};
             cudaEventRecord(eStart, 0);
             kernel_mults<T, nrows><<<blocksMult, nthreadsMult>>>(
-                d_As, d_bs, d_AtAs, d_Atbs, d_xs);
+                d_As, d_bs, d_AtAs, d_Atbs, d_xs, d_mapping);
             cudaEventRecord(eFinish, 0);
             cudaEventSynchronize(eFinish);
             float ms;
@@ -601,12 +670,14 @@ std::vector<vector_t<T>> run(
             unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
             cudaEventRecord(eStart, 0);
             kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
-                d_AtAs, d_L, d_Atbs, d_xs, n);
+                d_AtAs, d_L, d_Atbs, d_xs, d_mapping, n);
             cudaEventRecord(eFinish, 0);
             cudaEventSynchronize(eFinish);
             cudaEventElapsedTime(&ms, eStart, eFinish);
             printf("fnnls runtime = %f (ms)\n", ms);
             cuda::assert_if_error("checking 'kernel_fnnls' kernel");
+            kernel_permute<T, 32><<<(n*10+320-1)/320, 320>>>(d_xs, d_mapping, n);
+            cuda::assert_if_error("chacking permutation");
         }
     }
     
@@ -620,6 +691,7 @@ std::vector<vector_t<T>> run(
     cudaFree(d_L);
     cudaFree(d_bs);
     cudaFree(d_Atbs);
+    cudaFree(d_mapping);
     cudaFree(d_xs);
 
     return results;
@@ -695,7 +767,7 @@ std::vector<vector_t<T>> run_gpu_cpubased(std::vector<matrix_t<T>> const& As,
 
 int main(int argc, char** argv) {
     if (argc<=1) {
-        std::cout << "run with './main <number of channels> <n'\n";
+        std::cout << "run with './main <number of channels> <option>'\n";
         exit(0);
     }
 
@@ -722,7 +794,7 @@ int main(int argc, char** argv) {
     switch (option) {
     case -1:
     case 0:
-        std::cout << "run with './main <number of channels> <nthreads per block>'\n";
+        std::cout << "run with './exec <number of channels> <option> <...>'\n";
         exit(0);
         break;
     case 1: 
@@ -739,7 +811,7 @@ int main(int argc, char** argv) {
     }
         break;
     default:
-        std::cout << "run with './exec <option> <...>'\n";
+        std::cout << "run with './exec <number of channels> <option> <...>'\n";
         exit(0);
     }
     
