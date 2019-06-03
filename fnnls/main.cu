@@ -438,20 +438,9 @@ void kernel_fnnls(
         Eigen::numext::swap(
                 mapping[offset + nPassive], 
                 mapping[offset + w_max_idx]);
-        // swap AtA to avoid copy
-//        swap_rows_cols(AtA, nPassive, w_max_idx);
-//        AtA.col(nPassive).swap(AtA.col(w_max_idx));
-//        AtA.row(nPassive).swap(AtA.row(w_max_idx));
-        // swap Atb to match with AtA
-//        Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(w_max_idx));
-//        Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(w_max_idx));
-//        Eigen::numext::swap(Atb(nPassive), Atb(w_max_idx));
-//        Eigen::numext::swap(x(nPassive), x(w_max_idx));
         ++nPassive;
 
         // inner loop
-//        vector_t<data_type> s, tmp;
-//        matrix_t<data_type> L;
         data_type __s[matrix_t<T>::RowsAtCompileTime], __tmp[matrix_t<T>::RowsAtCompileTime];
         my_vector_t<data_type> s{__s}, tmp{__tmp};
         while (nPassive > 0) {
@@ -546,14 +535,6 @@ void kernel_fnnls(
           Eigen::numext::swap(
                 mapping[offset + nPassive], 
                 mapping[offset + alpha_idx]);
-//          swap_rows_cols(AtA, alpha_idx, nPassive);
-//          AtA.col(nPassive).swap(AtA.col(alpha_idx));
-//          AtA.row(nPassive).swap(AtA.row(alpha_idx));
-          // swap Atb to match with AtA
-//          Eigen::numext::swap(Atb.coeffRef(nPassive), Atb.coeffRef(alpha_idx));
-//          Eigen::numext::swap(x.coeffRef(nPassive), x.coeffRef(alpha_idx));
-//          Eigen::numext::swap(Atb(nPassive), Atb(alpha_idx));
-//          Eigen::numext::swap(x(nPassive), x(alpha_idx));
     }
   }
 }
