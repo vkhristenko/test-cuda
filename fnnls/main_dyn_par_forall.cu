@@ -379,74 +379,96 @@ void kernel_fnnls_mult() {
 }
 */
 
-template<typename T, int MSIZE>
+namespace simple_mv {
+
+template<typename T, int SIZE>
 __global__
-void kernel_fnnls_mv(
-        T* __restrict__ gAtA,
-        T* __restrict__ gAtb,
-        T* __restrict__ gx,
-        char const* __restrict__ mapping,
-        T* __restrict__ g_w_max,
-        int* __restrict__ g_w_max_idx,
-        int const ch) {
-    // number of cahnnels total will be 10 * (10 - npassive)
-    int const ty = threadIdx.y;
-    int const tx = threadIdx.x;
-    int const npassive = MSIZE - blockDim.y;
-    int const real_ty = mapping[ty + npassive];
+void kernel_compute_gradient() {
+    // indices
+    int const gtid = threadIdx.x + blockDim.x*blockIdx.x;
+    int const row = threadIdx.x % SIZE;
+    int const ch = gtid / SIZE;
 
-    // remove unnecesary threads
-    if (ty*MSIZE+tx >= blockDim.y*MSIZE) return;
+    if (ch >= nchannels) return;
 
-    // configure shared mem for reduction
-    __shared__ T __shrAtAx[MSIZE*MSIZE];
-    __shared__ T shrW[MSIZE];
+    // number of passive elements in the set is passed through
+    // global memory
+    auto npassive = g_npassive[ch];
 
-    // map around plain array
-    my_matrix_t<T> AtA{gAtA};
-    my_vector_t<T> Atb{gAtb};
-    my_vector_t<T> x{gx};
-    my_matrix_t<T> shrAtAx{__shrAtAx};
+    // only for values in the active ste
+    if (row >= npassive) {
 
-    // load values
-    auto const ata_value = AtA(real_ty, tx);
-    auto const atb_value = Atb(real_ty);
-    auto const x_value = x(tx);
-    auto const atax_value = ata_value * x_value;
-
-    // store into shared mem
-    shrAtAx(ty, tx) = atax_value;
+        // compute for each row
+        auto const real_row = mapping[gtid];
+        auto const atb = Atb(real_row);
+        auto sum_per_row{static_cast<T>(0)};
+        #pragma unroll
+        for (int int i=0; i<SIZE; ++i) 
+            sum_per_row += AtA(real_row, i) * x(i);
+        auto const w = atb - sum_per_row;
+        shrW(row) = w;
+    } 
     __syncthreads();
 
-    // reduce
-    if (tx < 5)
-        shrAtAx(ty, tx) += shrAtAx(ty, tx+5);
-    __syncthreads();
-
-    if (tx < 2)
-        shrAtAx(ty, tx) += shrAtAx(ty, tx+2) + shrAtAx(ty, tx+3);
-    __syncthreads();
-
-    if (tx==0) {
-        // subtract shrAtAx(ty, 3) as we added it twice
-        auto const atax_value = shrAtAx(ty, 0) + shrAtAx(ty, 1) - shrAtAx(ty, 3);
-        auto const wvalue = atb_value - atax_value;
-        shrW[ty] = wvalue;
-    }
-    __syncthreads();
-
-    // find max w avlue
-    if (tx==0 && ty==0) {
-        T w_max {static_cast<T>(-1)};
-        int w_max_idx = -1;
-        for (int i=0; i<blockDim.y; i++)
-            if (w_max < shrW[i]) {
-                w_max = shrW[i];
-                w_max_idx = npassive + i;
+    // TODO: improve this reduction if needed
+    if (row == 0) {
+        auto w_max = shrW(npassive);
+        int w_max_idx = npassive;
+        for (int i=npassive+1; i<SIZE; ++i) 
+            if (w_max < shrW(i)) {
+                w_max = shrW(i);
+                w_max_idx = i;
             }
-        g_w_max[ch] = w_max;
-        g_w_max_idx[ch] = w_max_idx;
 
+        // check for convergence
+        if (w_max < eps) {
+            fnnls_state[ch] = true; // finished
+            return;
+        }
+
+        // if not finished for this channels,
+        // swap mapping and inc passive
+        // note, we are using gtid as it is basically the offset
+        Eigen::numext::swap(
+            mapping[gtid + npassive],
+            mapping[gtid + w_max_idx]);
+        npassive++;
+        g_npassive[ch] = npassive;
+    }
+}
+
+}
+
+template<typename T>
+__global__
+void kernel_cholesky_solver() {
+
+}
+
+template<typename T>
+__global__
+void kernel_reduce_state() {
+
+}
+
+template<typename T>
+__global__
+void kernel_fnnls_launcher() {
+    for (int iter=0; iter<max_iterations; ++iter) {
+        //
+        kernel_compute_gradient();
+
+        //
+        kernel_cholesky_solver();
+
+        // 
+        kernel_reduce_state();
+        cudaDeviceSynchronize();
+
+        // check if need to continue
+        auto const isFinished = fnnls_state[0];
+        if (isFinished)
+            return;
     }
 }
 
@@ -457,9 +479,7 @@ void kernel_fnnls(
         matrix_t<T> * __restrict__ Ls,
         vector_t<T> * __restrict__ Atbs,
         vector_t<T> * __restrict__ xs,
-        T* __restrict__ g_w_max,
-        int* __restrict__ g_w_max_idx,
-        char* __restrict__ mapping,
+        char * __restrict__ mapping,
         unsigned int n) {
     int const tid = threadIdx.x + blockIdx.x * blockDim.x;
     int const offset = tid * VECTOR_SIZE;
@@ -484,17 +504,31 @@ void kernel_fnnls(
           break;
 
         //  
-        kernel_fnnls_mv<T, matrix_t<T>::RowsAtCompileTime><<<1, dim3(10, nActive)>>>(
-            AtAs[tid].data(), Atbs[tid].data(), xs[tid].data(),
-            current_mapping, g_w_max, g_w_max_idx, tid);
-        cudaDeviceSynchronize();
+        unsigned int w_max_idx = -1;
+        auto max_w {static_cast<T>(-1)};
+        for (unsigned int i=VECTOR_SIZE-nActive; i<VECTOR_SIZE; i++) {
+            auto sum_per_row{static_cast<T>(0)};
+            auto const real_i = mapping[offset + i];
+            auto const atb = Atb(real_i);
+            #pragma unroll
+            for (unsigned int k=0; k<VECTOR_SIZE; ++k)
+                // note, we do not need to look up k in the mapping
+                // both AtA and x have swaps applied -> therefore dot product will 
+                // not change per row
+                sum_per_row += AtA(real_i, k) * x(k);
+
+            // compute gradient value and check if it is greater than max
+            auto const wvalue = atb - sum_per_row;
+            if (max_w < wvalue) {
+                max_w = wvalue;
+                w_max_idx = i;
+            }
+        }
 
         // check for convergence
-        auto const max_w = g_w_max[tid];
         if (max_w < eps)
           break;
 
-        auto const w_max_idx = g_w_max_idx[tid];
         Eigen::numext::swap(
                 mapping[offset + nPassive], 
                 mapping[offset + w_max_idx]);
@@ -646,8 +680,6 @@ std::vector<vector_t<T>> run(
     matrix_t<T> *d_As, *d_AtAs, *d_L;
     vector_t<T> *d_bs, *d_Atbs, *d_xs;
     char *d_mapping;
-    T *d_w_max;
-    int *d_w_max_idx;
     unsigned int n = As.size();
 
     // allocate on device
@@ -657,8 +689,6 @@ std::vector<vector_t<T>> run(
     cuda::cuda_malloc(d_bs, n);
     cuda::cuda_malloc(d_Atbs, n);
     cuda::cuda_malloc(d_xs, n);
-    cuda::cuda_malloc(d_w_max, n);
-    cuda::cuda_malloc(d_w_max_idx, n);
     cuda::cuda_malloc(d_mapping, n * matrix_t<T>::RowsAtCompileTime);
     cuda::assert_if_error("\tcuda mallocs");
 
@@ -685,7 +715,7 @@ std::vector<vector_t<T>> run(
         unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
         cudaEventRecord(eStart, 0);
         kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
-            d_AtAs, d_L, d_Atbs, d_xs, d_w_max, d_w_max_idx, d_mapping, n);
+            d_AtAs, d_L, d_Atbs, d_xs, d_mapping, n);
         cudaEventRecord(eFinish, 0);
         cudaEventSynchronize(eFinish);
         cudaEventElapsedTime(&ms, eStart, eFinish);
@@ -714,7 +744,7 @@ std::vector<vector_t<T>> run(
             unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
             cudaEventRecord(eStart, 0);
             kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
-                d_AtAs, d_L, d_Atbs, d_xs, d_w_max, d_w_max_idx, d_mapping, n);
+                d_AtAs, d_L, d_Atbs, d_xs, d_mapping, n);
             cudaEventRecord(eFinish, 0);
             cudaEventSynchronize(eFinish);
             cudaEventElapsedTime(&ms, eStart, eFinish);
@@ -732,8 +762,6 @@ std::vector<vector_t<T>> run(
     cudaEventDestroy(eFinish);
     cudaFree(d_As);
     cudaFree(d_AtAs);
-    cudaFree(d_w_max);
-    cudaFree(d_w_max_idx);
     cudaFree(d_L);
     cudaFree(d_bs);
     cudaFree(d_Atbs);
