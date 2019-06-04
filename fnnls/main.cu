@@ -415,17 +415,20 @@ void kernel_fnnls(
         for (unsigned int i=VECTOR_SIZE-nActive; i<VECTOR_SIZE; i++) {
             auto sum_per_row{static_cast<T>(0)};
             T ata[VECTOR_SIZE];
+            T xlocal[VECTOR_SIZE];
             auto const real_i = mapping[offset + i];
             auto const atb = Atb(real_i);
             #pragma unroll
-            for (unsigned int k=0; k<VECTOR_SIZE; ++k)
+            for (unsigned int k=0; k<VECTOR_SIZE; ++k) {
                 ata[k] = AtA(real_i, k);
+                xlocal[k] = x(k);
+            }
             #pragma unroll
             for (unsigned int k=0; k<VECTOR_SIZE; ++k)
                 // note, we do not need to look up k in the mapping
                 // both AtA and x have swaps applied -> therefore dot product will 
                 // not change per row
-                sum_per_row += ata[k] * x(k);
+                sum_per_row += ata[k] * xlocal[k];
 
             // compute gradient value and check if it is greater than max
             auto const wvalue = atb - sum_per_row;
