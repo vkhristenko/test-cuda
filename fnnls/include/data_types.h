@@ -58,11 +58,13 @@ struct my_matrix<T, Stride, EigenToMine<Eigen::ColMajor>::value> {
     T const& operator()(int row, int col) const { return data[col*Stride + row]; }
 };
 
-template<typename T>
-using matrix_t = Eigen::Matrix<T, MATRIX_SIZE, MATRIX_SIZE, Eigen::ColMajor>;
+constexpr auto ColRowMajor = Eigen::ColMajor;
 
 template<typename T>
-using my_matrix_t = my_matrix<T, MATRIX_SIZE, EigenToMine<Eigen::ColMajor>::value>;
+using matrix_t = Eigen::Matrix<T, MATRIX_SIZE, MATRIX_SIZE, ColRowMajor>;
+
+template<typename T>
+using my_matrix_t = my_matrix<T, MATRIX_SIZE, EigenToMine<ColRowMajor>::value>;
 
 template<typename T>
 using vector_t = Eigen::Matrix<T, VECTOR_SIZE, 1>;

@@ -422,7 +422,7 @@ void kernel_fnnls(
                 // note, we do not need to look up k in the mapping
                 // both AtA and x have swaps applied -> therefore dot product will 
                 // not change per row
-                sum_per_row += ata(real_i, k) * x(k);
+                sum_per_row += AtA(real_i, k) * x(k);
 
             // compute gradient value and check if it is greater than max
             auto const wvalue = atb - sum_per_row;
