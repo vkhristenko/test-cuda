@@ -1,12 +1,15 @@
 .PHONY: all, clean
 
-all: run
+all: main main_dyn_par_foreach
 
 HEADERS=fnnls_no_mm_mv.h
 EIGEN_HOME=/data/user/vkhriste/eigen/eigen
 
-run: main.cu
+main: main.cu
 	nvcc -I${EIGEN_HOME} -arch=sm_61 --expt-relaxed-constexpr -DUSE_V1  -lineinfo -Xptxas -v -std=c++14 -O2 -o $@ $<
 
+main_dyn_par_foreach: main_dyn_par_foreach.cu
+	nvcc -I${EIGEN_HOME} -arch=sm_61 --expt-relaxed-constexpr -DUSE_V1  -lineinfo -Xptxas -v -std=c++14 -O2 -rdc=true -o $@ $< -lcudadevrt
+
 clean:
-	rm run
+	rm main main_dyn_par_foreach
