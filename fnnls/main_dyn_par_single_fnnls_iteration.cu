@@ -51,7 +51,9 @@ void kernel_mults(
         matrix_t<T> * __restrict__ AtAs,
         vector_t<T> * __restrict__ Atbs,
         vector_t<T> * __restrict__ xs,
-        char * __restrict__ mapping) {
+        char * __restrict__ mapping,
+        int * __restrict__ thread2ch,
+        int * __restrict__ npassive) {
     int const ch = blockIdx.x;
     int const tx = threadIdx.x;
     int const ty = threadIdx.y;
@@ -86,6 +88,11 @@ void kernel_mults(
         xs[ch](tx) = 0;
         // init the mapping
         mapping[ch*MSIZE + tx] = tx;
+
+        if (tx == 0) {
+            thread2ch[ch] = ch;
+            npassive[ch] = 0;
+        }
     }
 }
 
@@ -379,164 +386,234 @@ void kernel_fnnls_mult() {
 }
 */
 
+
 template<typename T>
 __global__
-void kernel_fnnls(
+void kernel_fnnls_single_iteration(
         matrix_t<T> * __restrict__ AtAs,
         matrix_t<T> * __restrict__ Ls,
         vector_t<T> * __restrict__ Atbs,
         vector_t<T> * __restrict__ xs,
         char * __restrict__ mapping,
-        unsigned int n) {
+        int* __restrict__ thread2ch,
+        int * __restrict__ pChannelsLeft,
+        int * __restrict__ g_npassive,
+        int const n) {
     int const tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int const offset = tid * VECTOR_SIZE;
-    char const* current_mapping = mapping + offset;
-
     if (tid >= n) return;
 
+    printf("hello from thread %d\n", tid);
+
+    // get the right channel id
+    auto const ch = thread2ch[tid];
+    int const offset = ch * VECTOR_SIZE;
+    char const* current_mapping = mapping + offset;
+
+
     constexpr double eps = 1e-11;
-    constexpr unsigned int max_iterations = 1000;
-    my_matrix_t<T> AtA{AtAs[tid].data()};
-    my_matrix_t<T> L{Ls[tid].data()};
-    my_vector_t<T> Atb{Atbs[tid].data()};
-    my_vector_t<T> x{xs[tid].data()};
+    my_matrix_t<T> AtA{AtAs[ch].data()};
+    my_matrix_t<T> L{Ls[ch].data()};
+    my_vector_t<T> Atb{Atbs[ch].data()};
+    my_vector_t<T> x{xs[ch].data()};
     using data_type = T;
 
-    auto nPassive = 0;
-    // main loop
-    for (auto iter = 0; iter < max_iterations; ++iter) {
-        const auto nActive = VECTOR_SIZE - nPassive;
+    // load the number of passive values in the set
+    auto nPassive = g_npassive[ch];
 
-        if(!nActive)
-          break;
+    //  
+    unsigned int w_max_idx = -1;
+    auto max_w {static_cast<T>(-1)};
+    for (unsigned int i=nPassive; i<VECTOR_SIZE; i++) {
+        auto sum_per_row{static_cast<T>(0)};
+        auto const real_i = mapping[offset + i];
+        auto const atb = Atb(real_i);
+        #pragma unroll
+        for (unsigned int k=0; k<VECTOR_SIZE; ++k)
+            // note, we do not need to look up k in the mapping
+            // both AtA and x have swaps applied -> therefore dot product will 
+            // not change per row
+            sum_per_row += AtA(real_i, k) * x(k);
 
-        //  
-        unsigned int w_max_idx = -1;
-        auto max_w {static_cast<T>(-1)};
-        for (unsigned int i=VECTOR_SIZE-nActive; i<VECTOR_SIZE; i++) {
-            auto sum_per_row{static_cast<T>(0)};
-            auto const real_i = mapping[offset + i];
-            auto const atb = Atb(real_i);
-            #pragma unroll
-            for (unsigned int k=0; k<VECTOR_SIZE; ++k)
-                // note, we do not need to look up k in the mapping
-                // both AtA and x have swaps applied -> therefore dot product will 
-                // not change per row
-                sum_per_row += AtA(real_i, k) * x(k);
-
-            // compute gradient value and check if it is greater than max
-            auto const wvalue = atb - sum_per_row;
-            if (max_w < wvalue) {
-                max_w = wvalue;
-                w_max_idx = i;
-            }
+        // compute gradient value and check if it is greater than max
+        auto const wvalue = atb - sum_per_row;
+        if (max_w < wvalue) {
+            max_w = wvalue;
+            w_max_idx = i;
         }
-
-        // check for convergence
-        if (max_w < eps)
-          break;
-
-        Eigen::numext::swap(
-                mapping[offset + nPassive], 
-                mapping[offset + w_max_idx]);
-        ++nPassive;
-
-        // inner loop
-        data_type __s[matrix_t<T>::RowsAtCompileTime], __tmp[matrix_t<T>::RowsAtCompileTime];
-        my_vector_t<data_type> s{__s}, tmp{__tmp};
-        while (nPassive > 0) {
-          switch (nPassive) {
-          case 1:
-              FusedCholeskySolver<T, 1>::compute(AtA, Atb, s, current_mapping);
-              break;
-          case 2:
-              FusedCholeskySolver<T, 2>::compute(AtA, Atb, s, current_mapping);
-              break;
-          case 3:
-              FusedCholeskySolver<T, 3>::compute(AtA, Atb, s, current_mapping);
-              break;
-          case 4:
-              FusedCholeskyForwardSubstUnrolled<T, 4>::compute(AtA, Atb, L, tmp, 
-                current_mapping);
-              BackwardSubstUnrolled<T, 4>::compute(L, tmp, s);
-              break;
-          case 5:
-              FusedCholeskyForwardSubstUnrolled<T, 5>::compute(AtA, Atb, L, tmp,
-                current_mapping);
-              BackwardSubstUnrolled<T, 5>::compute(L, tmp, s);
-              break;
-          case 6:
-              FusedCholeskyForwardSubstUnrolled<T, 6>::compute(AtA, Atb, L, tmp,
-                current_mapping);
-              BackwardSubstUnrolled<T, 6>::compute(L, tmp, s);
-              break;
-          case 7:
-              FusedCholeskyForwardSubstUnrolled<T, 7>::compute(AtA, Atb, L, tmp,
-                current_mapping);
-              BackwardSubstUnrolled<T, 7>::compute(L, tmp, s);
-              break;
-          case 8:
-              FusedCholeskyForwardSubstUnrolled<T, 8>::compute(AtA, Atb, L, tmp,
-                current_mapping);
-              BackwardSubstUnrolled<T, 8>::compute(L, tmp, s);
-              break;
-          default:
-              FusedCholeskyForwardSubst<T>::compute(AtA, Atb, L, tmp,
-                current_mapping, nPassive);
-              BackwardSubst<T>::compute(L, tmp, s, nPassive);
-          }
-
-          bool hasNegative = false;
-          for (int ii=0; ii<nPassive; ++ii) {
-              hasNegative |= s(ii) <= 0;
-          }
-          if (!hasNegative) {
-              for (int i=0; i<nPassive; ++i) {
-                  // note, s contains passive/active set layout
-                  // and x contains unpermuted final values in their repective pos
-                  auto const real_i = mapping[offset + i];
-                  x(real_i) = s(i);
-              }
-              break;
-          }
-
-          auto alpha = std::numeric_limits<T>::max();
-          char alpha_idx=0, real_alpha_idx=0;
-
-          for (auto i = 0; i < nPassive; ++i) {
-            if (s(i) <= 0.) {
-              auto const real_i = mapping[offset + i];
-              auto const x_i = x(real_i);
-              auto const ratio = x_i / (x_i - s(i));
-              if (ratio < alpha) {
-                alpha = ratio;
-                alpha_idx = i;
-                real_alpha_idx = real_i;
-              }
-            }
-          }
-
-          if (std::numeric_limits<T>::max() == alpha) {
-            for (int i=0; i<nPassive; ++i) {
-                auto const real_i = mapping[offset + i];
-                x(real_i) = s(i);
-            }
-            break;
-          }
-
-          for (int ii=0; ii<nPassive; ++ii) {
-            auto const real_i = mapping[offset+ii];
-            auto const x_ii = x(real_i);
-            x(real_i) += alpha * (s(ii) - x_ii);
-          }
-          x(real_alpha_idx) = 0;
-          --nPassive;
-
-          Eigen::numext::swap(
-                mapping[offset + nPassive], 
-                mapping[offset + alpha_idx]);
     }
-  }
+
+    // check for convergence - finished if passes
+    if (max_w < eps)
+        return;
+
+    Eigen::numext::swap(
+            mapping[offset + nPassive], 
+            mapping[offset + w_max_idx]);
+    ++nPassive;
+
+    // inner loop
+    data_type __s[matrix_t<T>::RowsAtCompileTime], __tmp[matrix_t<T>::RowsAtCompileTime];
+    my_vector_t<data_type> s{__s}, tmp{__tmp};
+    /*
+    while (nPassive > 0) {
+      switch (nPassive) {
+      case 1:
+          FusedCholeskySolver<T, 1>::compute(AtA, Atb, s, current_mapping);
+          break;
+      case 2:
+          FusedCholeskySolver<T, 2>::compute(AtA, Atb, s, current_mapping);
+          break;
+      case 3:
+          FusedCholeskySolver<T, 3>::compute(AtA, Atb, s, current_mapping);
+          break;
+      case 4:
+          FusedCholeskyForwardSubstUnrolled<T, 4>::compute(AtA, Atb, L, tmp, 
+            current_mapping);
+          BackwardSubstUnrolled<T, 4>::compute(L, tmp, s);
+          break;
+      case 5:
+          FusedCholeskyForwardSubstUnrolled<T, 5>::compute(AtA, Atb, L, tmp,
+            current_mapping);
+          BackwardSubstUnrolled<T, 5>::compute(L, tmp, s);
+          break;
+      case 6:
+          FusedCholeskyForwardSubstUnrolled<T, 6>::compute(AtA, Atb, L, tmp,
+            current_mapping);
+          BackwardSubstUnrolled<T, 6>::compute(L, tmp, s);
+          break;
+      case 7:
+          FusedCholeskyForwardSubstUnrolled<T, 7>::compute(AtA, Atb, L, tmp,
+            current_mapping);
+          BackwardSubstUnrolled<T, 7>::compute(L, tmp, s);
+          break;
+      case 8:
+          FusedCholeskyForwardSubstUnrolled<T, 8>::compute(AtA, Atb, L, tmp,
+            current_mapping);
+          BackwardSubstUnrolled<T, 8>::compute(L, tmp, s);
+          break;
+      default:
+          FusedCholeskyForwardSubst<T>::compute(AtA, Atb, L, tmp,
+            current_mapping, nPassive);
+          BackwardSubst<T>::compute(L, tmp, s, nPassive);
+      }
+
+      bool hasNegative = false;
+      for (int ii=0; ii<nPassive; ++ii) {
+          hasNegative |= s(ii) <= 0;
+      }
+      if (!hasNegative) {
+          for (int i=0; i<nPassive; ++i) {
+              // note, s contains passive/active set layout
+              // and x contains unpermuted final values in their repective pos
+              auto const real_i = mapping[offset + i];
+              x(real_i) = s(i);
+          }
+          break;
+      }
+
+      auto alpha = std::numeric_limits<T>::max();
+      char alpha_idx=0, real_alpha_idx=0;
+
+      for (auto i = 0; i < nPassive; ++i) {
+        if (s(i) <= 0.) {
+          auto const real_i = mapping[offset + i];
+          auto const x_i = x(real_i);
+          auto const ratio = x_i / (x_i - s(i));
+          if (ratio < alpha) {
+            alpha = ratio;
+            alpha_idx = i;
+            real_alpha_idx = real_i;
+          }
+        }
+      }
+
+      if (std::numeric_limits<T>::max() == alpha) {
+        for (int i=0; i<nPassive; ++i) {
+            auto const real_i = mapping[offset + i];
+            x(real_i) = s(i);
+        }
+        break;
+      }
+
+      for (int ii=0; ii<nPassive; ++ii) {
+        auto const real_i = mapping[offset+ii];
+        auto const x_ii = x(real_i);
+        x(real_i) += alpha * (s(ii) - x_ii);
+      }
+      x(real_alpha_idx) = 0;
+      --nPassive;
+
+      Eigen::numext::swap(
+            mapping[offset + nPassive], 
+            mapping[offset + alpha_idx]);
+    }
+    */
+
+    // if npassive is vector size -> all values are in the passive set
+    g_npassive[ch] = nPassive;
+    if (nPassive == VECTOR_SIZE)
+        return;
+
+    // for the channels that need to go for another iteration
+    // need to inc and save the channel id
+    auto const pos = atomicAdd(pChannelsLeft, 1);
+    thread2ch[pos] = ch;
+}
+
+#define cucheck_dev(call)                                   \
+{                                                           \
+      cudaError_t cucheck_err = (call);                         \
+      if(cucheck_err != cudaSuccess) {                          \
+              const char *err_str = cudaGetErrorString(cucheck_err);  \
+              printf("%s (%d): %s\n", __FILE__, __LINE__, err_str);   \
+              assert(0);                                              \
+            }                                                         \
+}
+
+__device__ int channelsCounter = 0;
+
+template<typename T>
+__global__
+void kernel_fnnls_launcher(
+        matrix_t<T> * __restrict__ AtAs,
+        matrix_t<T> * __restrict__ Ls,
+        vector_t<T> * __restrict__ Atbs,
+        vector_t<T> * __restrict__ xs,
+        char * __restrict__ mapping,
+        int* __restrict__ thread2ch,
+        int* __restrict__ npassive,
+        int const totalChannels, 
+        int const threadsForFnnls) {
+    auto const tid = threadIdx.x;
+    if (tid > 0) return; // make sure we have a single thread here
+
+    printf("starting launcher...\n");
+    int channelsLeft = totalChannels;
+    channelsCounter = 0;
+    constexpr int max_iterations = 500;
+    for (int iter=0; iter<max_iterations; ++iter) {
+        printf("iteration %d of launcher...\n", iter);
+        auto const threadsPerBlock = channelsLeft<threadsForFnnls 
+            ? channelsLeft : threadsForFnnls;
+        auto const blocks = channelsLeft < threadsPerBlock
+            ? 1
+            : (channelsLeft + threadsPerBlock - 1) / threadsPerBlock;
+        printf("calling child kernel...\n");
+        kernel_fnnls_single_iteration<T><<<blocks, threadsPerBlock>>>(
+            AtAs, Ls, Atbs, xs, mapping, thread2ch, &channelsCounter, 
+            npassive, channelsLeft);
+        printf("calling device synch...\n");
+        cucheck_dev(cudaGetLastError());
+        cudaDeviceSynchronize();
+
+        // n channels that still need to go for another iteration of fnnls
+        channelsLeft = channelsCounter;
+        if (channelsLeft == 0) 
+            return;
+
+        // set the counter to 0 and do another loop
+        channelsCounter = 0;
+    }
 }
 
 template<typename T, int NCHANNELS>
@@ -587,6 +664,7 @@ std::vector<vector_t<T>> run(
     matrix_t<T> *d_As, *d_AtAs, *d_L;
     vector_t<T> *d_bs, *d_Atbs, *d_xs;
     char *d_mapping;
+    int *d_thread2ch, *d_npassive;
     unsigned int n = As.size();
 
     // allocate on device
@@ -596,6 +674,8 @@ std::vector<vector_t<T>> run(
     cuda::cuda_malloc(d_bs, n);
     cuda::cuda_malloc(d_Atbs, n);
     cuda::cuda_malloc(d_xs, n);
+    cuda::cuda_malloc(d_thread2ch, n);
+    cuda::cuda_malloc(d_npassive, n);
     cuda::cuda_malloc(d_mapping, n * matrix_t<T>::RowsAtCompileTime);
     cuda::assert_if_error("\tcuda mallocs");
 
@@ -610,7 +690,7 @@ std::vector<vector_t<T>> run(
         dim3 blocksMult{n};
         cudaEventRecord(eStart, 0);
         kernel_mults<T, nrows><<<blocksMult, nthreadsMult>>>(
-            d_As, d_bs, d_AtAs, d_Atbs, d_xs, d_mapping);
+            d_As, d_bs, d_AtAs, d_Atbs, d_xs, d_mapping, d_thread2ch, d_npassive);
         cudaEventRecord(eFinish, 0);
         cudaEventSynchronize(eFinish);
         float ms;
@@ -621,8 +701,10 @@ std::vector<vector_t<T>> run(
         unsigned int threadsFnnls{nthreads};
         unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
         cudaEventRecord(eStart, 0);
-        kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
-            d_AtAs, d_L, d_Atbs, d_xs, d_mapping, n);
+        kernel_fnnls_launcher<T><<<1, 1>>>(
+            d_AtAs, d_L, d_Atbs, d_xs, d_mapping, d_thread2ch, d_npassive, n, nthreads);
+        cudaDeviceSynchronize();
+        cuda::assert_if_error("chacking kernel fnnls launcher\n");
         cudaEventRecord(eFinish, 0);
         cudaEventSynchronize(eFinish);
         cudaEventElapsedTime(&ms, eStart, eFinish);
@@ -632,14 +714,16 @@ std::vector<vector_t<T>> run(
         cuda::assert_if_error("chacking permutation");
     }
 
+    /*
     {
         std::cout << "running...\n";
         for (unsigned int i=0; i<10; i++) {
+            std::cout << "*** running... " << i << "\n";
             dim3 nthreadsMult{nrows, nrows};
             dim3 blocksMult{n};
             cudaEventRecord(eStart, 0);
             kernel_mults<T, nrows><<<blocksMult, nthreadsMult>>>(
-                d_As, d_bs, d_AtAs, d_Atbs, d_xs, d_mapping);
+                d_As, d_bs, d_AtAs, d_Atbs, d_xs, d_mapping, d_thread2ch, d_npassive);
             cudaEventRecord(eFinish, 0);
             cudaEventSynchronize(eFinish);
             float ms;
@@ -650,8 +734,9 @@ std::vector<vector_t<T>> run(
             unsigned int threadsFnnls{nthreads};
             unsigned int blocksFnnls{(n+threadsFnnls-1)/threadsFnnls};
             cudaEventRecord(eStart, 0);
-            kernel_fnnls<T><<<blocksFnnls, threadsFnnls>>>(
-                d_AtAs, d_L, d_Atbs, d_xs, d_mapping, n);
+            kernel_fnnls_launcher<T><<<1, 1>>>(
+                d_AtAs, d_L, d_Atbs, d_xs, d_mapping, d_thread2ch, d_npassive, n, nthreads);
+            cuda::assert_if_error("chacking kernel fnnls launcher");
             cudaEventRecord(eFinish, 0);
             cudaEventSynchronize(eFinish);
             cudaEventElapsedTime(&ms, eStart, eFinish);
@@ -660,7 +745,7 @@ std::vector<vector_t<T>> run(
             kernel_permute<T, 32><<<(n*10+320-1)/320, 320>>>(d_xs, d_mapping, n);
             cuda::assert_if_error("chacking permutation");
         }
-    }
+    }*/
     
     cuda::copy_to_host(results, d_xs);
     cuda::assert_if_error("\tcuda memcpy back to host");
@@ -670,8 +755,10 @@ std::vector<vector_t<T>> run(
     cudaFree(d_As);
     cudaFree(d_AtAs);
     cudaFree(d_L);
+    cudaFree(d_thread2ch);
     cudaFree(d_bs);
     cudaFree(d_Atbs);
+    cudaFree(d_npassive);
     cudaFree(d_mapping);
     cudaFree(d_xs);
 

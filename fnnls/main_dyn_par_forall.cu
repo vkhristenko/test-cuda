@@ -577,7 +577,7 @@ void kernel_cholesky_solver_old() {
 template<typename T>
 __global__
 void kernel_fnnls_launcher() {
-    int channelsLeft = 0;
+    int channelsLeft = totalChannels;
     for (int iter=0; iter<max_iterations; ++iter) {
         //
         kernel_compute_gradient();
@@ -592,6 +592,9 @@ void kernel_fnnls_launcher() {
         // if there are none left -> we are done!
         if (channelsLeft == 0)
             return;
+
+        // set the counter to 0 and do another iteration
+        *pChannelsLeft = 0;
     }
 }
 
