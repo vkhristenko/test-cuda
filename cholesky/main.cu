@@ -93,8 +93,10 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
         if (rank>ineighbor && rank<N) {
             if (idx < middle)
                 reg_accum_1[idx] = value_l_i_0 * l_i_0;
-            else 
-                reg_accum_2[idx-middle] = value_l_i_0 * l_i_0;
+            else {
+                auto const idxtmp = idx - middle;
+                reg_accum_2[idxtmp] = value_l_i_0 * l_i_0;
+            }
         }
     }
 
@@ -126,10 +128,13 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
         // compute L(i, icol) for i>icol
         T l_i_icol;
         if (rank>icol && rank<N) {
+            auto tmp = icol-1<middle
+                ? reg_accum_1[icol-1]
+                : reg_accum_2[icol-1-middle];
             if (icol-1<middle)
-                l_i_icol = (m_i_icol - reg_accum_1[icol-1]) / l_icol_icol;
+                l_i_icol = (m_i_icol - tmp) / l_icol_icol;
             else 
-                l_i_icol = (m_i_icol - reg_accum_2[icol-1-middle]) / l_icol_icol;
+                l_i_icol = (m_i_icol - tmp) / l_icol_icol;
 
             // store to global
             Ls[ch](rank, icol) = l_i_icol;
@@ -146,10 +151,13 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
             auto value_l_i_icol = this_tile.shfl_up(l_i_icol, delta);
             auto const idx = rank-delta-1;
             if (rank>icol+delta && rank<N) {
+                auto value = value_l_i_icol * l_i_icol;
                 if (idx < middle)
-                    reg_accum_1[idx] += value_l_i_icol*l_i_icol;
-                else 
-                    reg_accum_2[idx-middle] += value_l_i_icol*l_i_icol;
+                    reg_accum_1[idx] += value;
+                else {
+                    auto const idxtmp = idx - middle;
+                    reg_accum_2[idxtmp] += value;
+                }
             }
         }
     }
