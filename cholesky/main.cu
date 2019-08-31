@@ -77,7 +77,9 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
     // accumulators
     // FIXME: this must be in registers
     T reg_sumsq;
-    T reg_accum[N-2];
+    T reg_accum_1[(N-2) / 2];
+    T reg_accum_2[((N-2) + 1) / 2];
+    constexpr int middle = (N - 2) / 2;
 
     // accumulate per row
     if (rank>=1 && rank<N)
@@ -87,8 +89,13 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
     #pragma unroll
     for (int ineighbor=1; ineighbor<N-1; ineighbor++) {
         auto value_l_i_0 = this_tile.shfl_up(l_i_0, ineighbor);
-        if (rank>ineighbor && rank<N)
-            reg_accum[rank-ineighbor-1] = value_l_i_0 * l_i_0;
+        auto const idx = rank - ineighbor - 1;
+        if (rank>ineighbor && rank<N) {
+            if (idx < middle)
+                reg_accum_1[idx] = value_l_i_0 * l_i_0;
+            else 
+                reg_accum_2[idx-middle] = value_l_i_0 * l_i_0;
+        }
     }
 
     // iterate until the last one:
@@ -119,7 +126,10 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
         // compute L(i, icol) for i>icol
         T l_i_icol;
         if (rank>icol && rank<N) {
-            l_i_icol = (m_i_icol - reg_accum[icol-1]) / l_icol_icol;
+            if (icol-1<middle)
+                l_i_icol = (m_i_icol - reg_accum_1[icol-1]) / l_icol_icol;
+            else 
+                l_i_icol = (m_i_icol - reg_accum_2[icol-1-middle]) / l_icol_icol;
 
             // store to global
             Ls[ch](rank, icol) = l_i_icol;
@@ -134,8 +144,13 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
         #pragma unroll
         for (int delta=1; delta<Nneighbors; delta++) {
             auto value_l_i_icol = this_tile.shfl_up(l_i_icol, delta);
-            if (rank>icol+delta && rank<N)
-                reg_accum[rank-delta-1] += value_l_i_icol*l_i_icol;
+            auto const idx = rank-delta-1;
+            if (rank>icol+delta && rank<N) {
+                if (idx < middle)
+                    reg_accum_1[idx] += value_l_i_icol*l_i_icol;
+                else 
+                    reg_accum_2[idx-middle] += value_l_i_icol*l_i_icol;
+            }
         }
     }
 
