@@ -3,15 +3,27 @@
 __global__ 
 void bcast(int arg) {
     int laneId = threadIdx.x & 0x1f;
-    int value; 
+    int value = threadIdx.x;
 
+    /*
     if (laneId == 0)
         value = arg;
-    value = __shfl_sync(0xffffffff, value, 0);
+        */
 
-    if (value != arg)
-        printf("thread %d failed.\n", threadIdx.x);
-    printf("thread %d value %d\n", threadIdx.x, value);
+    {
+        value = __shfl_sync(0xffffffff, value, 1);
+        printf("thread %d value %d\n", threadIdx.x, value);
+    }
+
+    {
+        auto value = __shfl_up_sync(0xffffffff, threadIdx.x, 1);
+        printf("thread %d value %d\n", threadIdx.x, value);
+    }
+
+    {
+        auto value = __shfl_down_sync(0xffffffff, threadIdx.x, 1);
+        printf("thread %d value %d\n", threadIdx.x, value);
+    }
 }
 
 int main() {
