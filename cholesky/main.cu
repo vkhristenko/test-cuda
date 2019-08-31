@@ -36,6 +36,12 @@ namespace gpu_v1 {
 
 constexpr int threadTileSize = 16;
 
+__device__ __forceinline__
+int compute_offset(int rank) {
+    auto const tmp = rank-2;
+    return tmp*(tmp+1) / 2;
+}
+
 template<typename T>
 __global__
 void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
@@ -45,11 +51,16 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
 
     // x <- [0, 15]
     // y <- [0, nchannels per block)
-    int const ch = threadIdx.y;
+    int const lch = threadIdx.y;
+    int const ch = threadIdx.y + blockIdx.x * blockDim.y;
+
+    extern __shared__ T shrAccum[];
+    auto *accum = shrAccum + lch*36; // FIXME for 10 by 10 matrices
 
     // partition all threads into groups of 16(threadTileSize)
     auto this_tile = tiled_partition<threadTileSize>(this_thread_block());
     int const rank = this_tile.thread_rank();
+    auto const offset = compute_offset(rank);
 
     // load M(i, 0)
     T m_i_0;
@@ -75,11 +86,7 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
     }
 
     // accumulators
-    // FIXME: this must be in registers
     T reg_sumsq;
-    T reg_accum_1[(N-2) / 2];
-    T reg_accum_2[((N-2) + 1) / 2];
-    constexpr int middle = (N - 2) / 2;
 
     // accumulate per row
     if (rank>=1 && rank<N)
@@ -91,12 +98,7 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
         auto value_l_i_0 = this_tile.shfl_up(l_i_0, ineighbor);
         auto const idx = rank - ineighbor - 1;
         if (rank>ineighbor && rank<N) {
-            if (idx < middle)
-                reg_accum_1[idx] = value_l_i_0 * l_i_0;
-            else {
-                auto const idxtmp = idx - middle;
-                reg_accum_2[idxtmp] = value_l_i_0 * l_i_0;
-            }
+                accum[idx + offset] = value_l_i_0 * l_i_0;
         }
     }
 
@@ -128,6 +130,8 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
         // compute L(i, icol) for i>icol
         T l_i_icol;
         if (rank>icol && rank<N) {
+            l_i_icol = (m_i_icol - accum[icol-1 + offset]) / l_icol_icol;
+            /*
             auto tmp = icol-1<middle
                 ? reg_accum_1[icol-1]
                 : reg_accum_2[icol-1-middle];
@@ -135,6 +139,7 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
                 l_i_icol = (m_i_icol - tmp) / l_icol_icol;
             else 
                 l_i_icol = (m_i_icol - tmp) / l_icol_icol;
+                */
 
             // store to global
             Ls[ch](rank, icol) = l_i_icol;
@@ -152,12 +157,15 @@ void kernel_cholesky(matrix_t<T> const* As, matrix_t<T> *Ls) {
             auto const idx = rank-delta-1;
             if (rank>icol+delta && rank<N) {
                 auto value = value_l_i_icol * l_i_icol;
+                accum[idx + offset] += value;
+                /*
                 if (idx < middle)
                     reg_accum_1[idx] += value;
                 else {
                     auto const idxtmp = idx - middle;
                     reg_accum_2[idxtmp] += value;
                 }
+                */
             }
         }
     }
@@ -201,13 +209,14 @@ std::vector<matrix_t<T>> launcher(std::vector<matrix_t<T>> const& As) {
         int nchannelsPerBlock = 32;
         dim3 nthreads = {threadTileSize, nchannelsPerBlock};
         int blocks{(As.size() + nchannelsPerBlock - 1) / nchannelsPerBlock};
-        kernel_cholesky<T><<<blocks, nthreads>>>(
+        int const nbytes = 32 * 36 * sizeof(T);
+        kernel_cholesky<T><<<blocks, nthreads, nbytes>>>(
             d_As, d_Ls);
         cudaDeviceSynchronize();
         cuda::assert_if_error("\tkernel gpu v1 cholesky decomposition");
 
         cudaEventRecord(start, 0);
-        kernel_cholesky<T><<<blocks, nthreads>>>(
+        kernel_cholesky<T><<<blocks, nthreads, nbytes>>>(
             d_As, d_Ls);
         cudaEventRecord(end, 0);
         cudaEventSynchronize(end);
